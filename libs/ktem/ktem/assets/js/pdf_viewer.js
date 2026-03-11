@@ -1,5 +1,41 @@
 function onBlockLoad() {
   var infor_panel_scroll_pos = 0;
+  var pdfJsViewerPath = "GR_FILE_ROOT_PATH/file=PDFJS_PREBUILT_DIR/web/viewer.html".replace(
+    /\\/g,
+    "/"
+  );
+
+  function getViewerInnerDoc(viewerId) {
+    var viewer = document.getElementById(viewerId);
+    if (!viewer) {
+      return null;
+    }
+
+    return viewer.contentDocument
+      ? viewer.contentDocument
+      : viewer.contentWindow
+        ? viewer.contentWindow.document
+        : null;
+  }
+
+  function buildViewerSrc(src, page) {
+    try {
+      var viewerUrl = new URL(pdfJsViewerPath, window.location.origin);
+      var pdfUrl = new URL(src, window.location.origin).toString();
+      var pageNum = Math.max(1, parseInt(page || "1", 10) || 1);
+      viewerUrl.searchParams.set("embed", "1");
+      viewerUrl.searchParams.set("disablehistory", "true");
+      viewerUrl.searchParams.set("sidebarviewonload", "0");
+      viewerUrl.searchParams.set("ktempage", String(pageNum));
+      viewerUrl.searchParams.set("ktemfit", "pdf");
+      viewerUrl.searchParams.set("file", pdfUrl);
+      viewerUrl.hash = "page=" + pageNum;
+      return viewerUrl.toString();
+    } catch (error) {
+      return src || "";
+    }
+  }
+
   globalThis.createModal = () => {
     // Create modal for the 1st time if it does not exist
     var modal = document.getElementById("pdf-modal");
@@ -17,8 +53,7 @@ function onBlockLoad() {
                 <span class="close" id="modal-expand">&#x26F6;</span>
               </div>
               <div class="modal-body">
-                <pdfjs-viewer-element id="pdf-viewer" viewer-path="GR_FILE_ROOT_PATH/file=PDFJS_PREBUILT_DIR" locale="en" phrase="true">
-                </pdfjs-viewer-element>
+                <iframe id="pdf-viewer" title="PDF preview" src="about:blank"></iframe>
               </div>
             </div>
           `;
@@ -83,10 +118,11 @@ function onBlockLoad() {
   }
 
   globalThis.compareText = (search_phrases, page_label) => {
-    var iframe = document.querySelector("#pdf-viewer").iframe;
-    var innerDoc = iframe.contentDocument
-      ? iframe.contentDocument
-      : iframe.contentWindow.document;
+    var innerDoc = getViewerInnerDoc("pdf-viewer");
+    if (!innerDoc) {
+      setTimeout(() => compareText(search_phrases, page_label), 1000);
+      return;
+    }
 
     var renderedPages = innerDoc.querySelectorAll("div#viewer div.page");
     if (renderedPages.length == 0) {
@@ -130,7 +166,6 @@ function onBlockLoad() {
     var target = event.currentTarget;
     var src = target.getAttribute("data-src");
     var page = target.getAttribute("data-page");
-    var search = target.getAttribute("data-search");
     var highlighted_spans =
       target.parentElement.parentElement.querySelectorAll("mark");
 
@@ -146,14 +181,12 @@ function onBlockLoad() {
     // var phrase = target.getAttribute("data-phrase");
 
     var pdfViewer = document.getElementById("pdf-viewer");
+    var viewerSrc = buildViewerSrc(src, page);
 
-    current_src = pdfViewer.getAttribute("src");
-    if (current_src != src) {
-      pdfViewer.setAttribute("src", src);
+    var currentSrc = pdfViewer.getAttribute("src");
+    if (currentSrc !== viewerSrc) {
+      pdfViewer.setAttribute("src", viewerSrc);
     }
-    // pdfViewer.setAttribute("phrase", phrase);
-    // pdfViewer.setAttribute("search", search);
-    pdfViewer.setAttribute("page", page);
 
     var scrollableDiv = document.getElementById("chat-info-panel");
     infor_panel_scroll_pos = scrollableDiv.scrollTop;
