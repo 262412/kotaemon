@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 from kotaemon.loaders.pdf_loader import get_page_thumbnails
 
 from ...db.models import engine
+# Import preview handlers for different file types
 from .page_preview_document import (
     extract_docx_html,
     extract_docx_text,
@@ -21,6 +22,7 @@ from .page_preview_resolver import PreviewFileResolver
 from .page_preview_service import PreviewPayloadService
 from .page_preview_spreadsheet import extract_xlsx_text
 from .page_preview_text import paginate_plain_text, read_text_file
+# Import runtime utilities for PDF handling and page management
 from .page_preview_runtime import (
     build_pdfjs_viewer_src,
     clamp_page,
@@ -33,32 +35,54 @@ from .page_preview_runtime import (
 )
 from .page_preview_types import detect_office_extension, is_office_source, is_pdf_source
 
+# HTML placeholder shown when no mindmap is generated
 MINDMAP_PLACEHOLDER_HTML = (
     "<div class='page-result-placeholder'>"
     "Enter a question to generate a page-specific mindmap."
     "</div>"
 )
+# Message shown when no answer is available yet
 ANSWER_PLACEHOLDER_TEXT = "Ask a question about the current page to generate an answer."
 logger = logging.getLogger(__name__)
 
 
 class ChatPagePreviewController:
+    """Controller for managing page-level document preview and chat isolation.
+    
+    Handles document preview, page navigation, and maintains isolated chat history
+    for each page of each file. Supports PDF, Office documents, and text files.
+    """
+    
     def __init__(self, app):
         self._app = app
+        # Cache for page thumbnail images: {file_id: {page_num: thumbnail_base64}}
         self._page_thumbnail_cache: dict[str, dict[str, str]] = {}
+        # Cache for page preview content: {file_id: {page_num: preview_html}}
         self._page_preview_cache: dict[str, dict[str, str]] = {}
+        # Cache for total pages per file: {file_id: total_pages}
         self._total_pages_cache: dict[str, int] = {}
+        # Cache for non-PDF file previews: {file_id: [page_html_list]}
         self._non_pdf_preview_cache: dict[str, list[str]] = {}
+        # Cache for file names: {file_id: file_name}
         self._file_name_cache: dict[str, str] = {}
+        # Resolver for locating and loading files
         self._file_resolver = PreviewFileResolver(app, self._file_name_cache)
+        # Service for handling non-PDF file previews
         self._non_pdf_preview_service = NonPdfPreviewService(self)
+        # Service for handling PowerPoint presentations
         self._presentation_preview_service = PresentationPreviewService(self)
+        # Service for converting Office documents to PDF
         self._office_conversion = OfficePreviewConversionService(logger=logger)
+        # Service for building preview payloads
         self._preview_payload_service = PreviewPayloadService(self)
+        # Track last previewed file ID
         self._last_preview_file_id: str = ""
+        # Track file that should force first page display
         self._force_first_page_file_id: str = ""
+        # Track files that have shown Office placeholder
         self._office_placeholder_shown: set[str] = set()
-        self._page_change_lock: dict[str, bool] = {}  # file_id -> locked
+        # Lock to prevent concurrent page changes: {file_id: locked}
+        self._page_change_lock: dict[str, bool] = {}
 
     @staticmethod
     def _find_soffice_binary() -> str:

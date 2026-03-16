@@ -1,3 +1,8 @@
+"""Service for building preview payloads using appropriate handlers.
+
+Routes preview requests to the correct handler based on file type.
+Supports PDF, Office documents, text files, and unknown formats.
+"""
 import os
 
 from .page_preview_handlers import (
@@ -13,8 +18,11 @@ from .page_preview_types import detect_source_extension
 
 
 class PreviewPayloadService:
+    """Orchestrates preview payload generation by routing to appropriate handler."""
+    
     def __init__(self, controller):
         self._controller = controller
+        # Ordered list of preview handlers (first match wins)
         self._handlers = [
             PdfPreviewHandler(controller),
             DocumentOfficePreviewHandler(controller),
@@ -25,6 +33,14 @@ class PreviewPayloadService:
         ]
 
     def build_payload(self, request: PreviewPayloadRequest) -> PreviewPayload:
+        """Build preview payload by finding the appropriate handler for the file type.
+        
+        Args:
+            request: Preview request containing file info and page number
+            
+        Returns:
+            PreviewPayload with preview source, total pages, and notices
+        """
         page = max(1, self._controller._safe_int(request.requested_page, 1))
         cached_total = max(1, self._controller._safe_int(request.known_total_pages, 1))
         if request.file_id:
