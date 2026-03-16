@@ -8,6 +8,24 @@ import time
 from .page_preview_runtime import get_file_signature, get_pdf_preview_dir, is_valid_pdf
 from .page_preview_types import detect_office_extension, is_office_source
 
+# ============================================================================
+# TODO: 性能优化留底 - Office 文件处理
+# ============================================================================
+# 
+# 当前问题：
+#   1. DOC/DOCX、PPT、Excel 文件依赖 LibreOffice 后台转 PDF
+#   2. 转换延迟明显（2-10 秒），服务器资源占用高
+#   3. 并发能力差，多文件同时转换会卡死
+#
+# 潜在优化方向：
+#   1. 异步转换 + 进度提示（用户等待时显示转换进度）
+#   2. 增量转换（只转换变化的页面）
+#   3. 预转换（上传时立即转换，而非首次访问时）
+#   4. 分布式转换（专用转换服务队列）
+#   5. 缓存优化（长期缓存 + 失效策略）
+#
+# ============================================================================
+
 
 class OfficePreviewConversionService:
     def __init__(self, logger: logging.Logger | None = None):
