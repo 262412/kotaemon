@@ -58,6 +58,7 @@ class ChatPagePreviewController:
         self._last_preview_file_id: str = ""
         self._force_first_page_file_id: str = ""
         self._office_placeholder_shown: set[str] = set()
+        self._page_change_lock: dict[str, bool] = {}  # file_id -> locked
 
     @staticmethod
     def _find_soffice_binary() -> str:
@@ -327,11 +328,11 @@ class ChatPagePreviewController:
             ANSWER_PLACEHOLDER_TEXT,
         )
 
-    def get_cached_page_outputs(self, page_outputs_cache: dict, page_number: int):
+    def get_cached_page_outputs(self, page_outputs_cache: dict, page_number: int, file_id: str = ""):
         if not isinstance(page_outputs_cache, dict):
             return self.clear_page_outputs()
 
-        page_key = str(max(1, int(page_number or 1)))
+        page_key = f"{file_id or 'default'}_{max(1, int(page_number or 1))}"
         page_output = page_outputs_cache.get(page_key, {})
         if not isinstance(page_output, dict):
             return self.clear_page_outputs()
@@ -362,11 +363,12 @@ class ChatPagePreviewController:
         last_question: str,
         mindmap_html: str,
         answer_text: str,
+        file_id: str = "",
     ):
         if not isinstance(page_outputs_cache, dict):
             page_outputs_cache = {}
 
-        page_key = str(max(1, int(page_number or 1)))
+        page_key = f"{file_id or 'default'}_{max(1, int(page_number or 1))}"
         updated_cache = dict(page_outputs_cache)
         updated_cache[page_key] = {
             "last_question": last_question or "",
@@ -402,34 +404,45 @@ class ChatPagePreviewController:
     def on_page_change(
         self, current_page, delta, file_id, file_path, page_outputs_cache, total_pages
     ):
-        if not file_id or not file_path:
-            _, total_pages, preview_src, preview_notice = self._build_preview_payload(
-                file_id, "", file_path, 1, 1
+        lock_key = file_id or "default"
+        
+        if self._page_change_lock.get(lock_key, False):
+            logger.debug(f"Page change ignored for file {lock_key}, page={current_page}, delta={delta}")
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        
+        try:
+            self._page_change_lock[lock_key] = True
+            
+            if not file_id or not file_path:
+                _, total_pages, preview_src, preview_notice = self._build_preview_payload(
+                    file_id, "", file_path, 1, 1
+                )
+                return (
+                    1,
+                    total_pages,
+                    preview_src,
+                    preview_notice,
+                    *self.clear_page_outputs(),
+                )
+
+            file_name = self._resolve_file_name_by_file_id(file_id)
+            requested_page = int(current_page or 1) + int(delta or 0)
+            next_page, total_pages, preview_src, preview_notice = self._build_preview_payload(
+                file_id,
+                file_name,
+                file_path,
+                requested_page,
+                total_pages,
             )
             return (
-                1,
+                next_page,
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.clear_page_outputs(),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
             )
-
-        file_name = self._resolve_file_name_by_file_id(file_id)
-        requested_page = int(current_page or 1) + int(delta or 0)
-        next_page, total_pages, preview_src, preview_notice = self._build_preview_payload(
-            file_id,
-            file_name,
-            file_path,
-            requested_page,
-            total_pages,
-        )
-        return (
-            next_page,
-            total_pages,
-            preview_src,
-            preview_notice,
-            *self.get_cached_page_outputs(page_outputs_cache, next_page),
-        )
+        finally:
+            self._page_change_lock[lock_key] = False
 
     def on_prev_page(
         self, current_page, file_id, file_path, page_outputs_cache, total_pages
@@ -448,33 +461,44 @@ class ChatPagePreviewController:
     def on_page_set(
         self, current_page, file_id, file_path, page_outputs_cache, total_pages
     ):
-        if not file_id or not file_path:
-            _, total_pages, preview_src, preview_notice = self._build_preview_payload(
-                file_id, "", file_path, 1, 1
+        lock_key = file_id or "default"
+        
+        if self._page_change_lock.get(lock_key, False):
+            logger.debug(f"Page set ignored for file {lock_key}, page={current_page}")
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        
+        try:
+            self._page_change_lock[lock_key] = True
+            
+            if not file_id or not file_path:
+                _, total_pages, preview_src, preview_notice = self._build_preview_payload(
+                    file_id, "", file_path, 1, 1
+                )
+                return (
+                    1,
+                    total_pages,
+                    preview_src,
+                    preview_notice,
+                    *self.clear_page_outputs(),
+                )
+
+            file_name = self._resolve_file_name_by_file_id(file_id)
+            next_page, total_pages, preview_src, preview_notice = self._build_preview_payload(
+                file_id,
+                file_name,
+                file_path,
+                current_page,
+                total_pages,
             )
             return (
-                1,
+                next_page,
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.clear_page_outputs(),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
             )
-
-        file_name = self._resolve_file_name_by_file_id(file_id)
-        next_page, total_pages, preview_src, preview_notice = self._build_preview_payload(
-            file_id,
-            file_name,
-            file_path,
-            current_page,
-            total_pages,
-        )
-        return (
-            next_page,
-            total_pages,
-            preview_src,
-            preview_notice,
-            *self.get_cached_page_outputs(page_outputs_cache, next_page),
-        )
+        finally:
+            self._page_change_lock[lock_key] = False
 
     def refresh_selected_file_preview(
         self, first_selector_choices, selected_file_ids, current_page, total_pages
@@ -520,6 +544,38 @@ class ChatPagePreviewController:
             current_preview_src,
             current_preview_notice,
         ) = values[:7]
+        
+        # Skip if no valid file is selected (prevent unnecessary processing)
+        if not file_id or not file_path:
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        
+        # Skip PDF files - they don't need polling
+        if file_name and file_name.lower().endswith('.pdf'):
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        
+        # Skip text-like files - they don't need conversion
+        if file_name and file_name.lower().endswith(('.txt', '.md', '.html', '.htm', '.mhtml')):
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        
+        # Check Office conversion status, but still update if PDF is ready
+        # Don't skip just because conversion is done - we need to check if preview has been updated to PDF
+        is_office_file = file_name and file_name.lower().endswith(('.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx'))
+        office_pdf_ready = False
+        if is_office_file and file_path:
+            try:
+                job_status = self._get_office_job_status(file_path)
+                if job_status == "done":
+                    # Check if we already have the converted PDF
+                    cached_pdf = self._get_cached_office_pdf_preview(file_path)
+                    if cached_pdf and os.path.isfile(cached_pdf):
+                        office_pdf_ready = True
+                        # Continue to build preview payload with the PDF
+                    else:
+                        # Conversion done but PDF not found, continue checking
+                        pass
+            except Exception:
+                pass  # Continue processing if status check fails
+        
         next_file_id, must_force_first, target_page = self._resolve_target_page(
             file_id, current_page
         )

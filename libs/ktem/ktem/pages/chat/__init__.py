@@ -184,6 +184,122 @@ function() {
         }
     }, 250);
 
+    // Auto-scroll answer panel to bottom when content updates
+    setTimeout(() => {
+        // Find the correct scrollable element - answer-panel is the scroll container
+        var answer_panel = document.querySelector("#answer-panel");
+        if (answer_panel) {
+            // Check if this element itself scrolls
+            if (answer_panel.scrollHeight > answer_panel.clientHeight) {
+                answer_panel.scrollTo({
+                    top: answer_panel.scrollHeight,
+                    behavior: 'smooth'
+                });
+            } else {
+                // Otherwise try direct children
+                var children = answer_panel.children;
+                for (var i = 0; i < children.length; i++) {
+                    var child = children[i];
+                    if (child && child.scrollHeight > child.clientHeight) {
+                        child.scrollTo({
+                            top: child.scrollHeight,
+                            behavior: 'smooth'
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+    }, 30);
+    
+    // Setup MutationObserver to auto-scroll on content changes (real-time streaming)
+    setTimeout(() => {
+        var answer_expand = document.querySelector("#answer-expand");
+        if (answer_expand) {
+            var observer = new MutationObserver(function(mutations) {
+                var answer_panel = document.querySelector("#answer-panel");
+                if (answer_panel) {
+                    // Scroll immediately without smooth animation for real-time following
+                    if (answer_panel.scrollHeight > answer_panel.clientHeight) {
+                        answer_panel.scrollTop = answer_panel.scrollHeight;
+                    } else {
+                        var children = answer_panel.children;
+                        for (var i = 0; i < children.length; i++) {
+                            var child = children[i];
+                            if (child && child.scrollHeight > child.clientHeight) {
+                                child.scrollTop = child.scrollHeight;
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            
+            observer.observe(answer_expand, {
+                childList: true,
+                subtree: true,
+                characterData: true
+            });
+        }
+    }, 100);
+    
+    // Initialize drag-to-pan for all file previews
+    setTimeout(() => {
+        function initDragPan(container) {
+            if (!container || container.dataset.dragInitialized === 'true') return;
+            
+            let isDragging = false;
+            let startX = 0, startY = 0;
+            let scrollLeft = 0, scrollTop = 0;
+            
+            const onMouseDown = (e) => {
+                isDragging = true;
+                startX = e.pageX - container.offsetLeft;
+                startY = e.pageY - container.offsetTop;
+                scrollLeft = container.scrollLeft;
+                scrollTop = container.scrollTop;
+                container.style.cursor = 'grabbing';
+                container.style.userSelect = 'none';
+                e.preventDefault();
+            };
+            
+            const onMouseLeave = () => {
+                isDragging = false;
+                container.style.cursor = 'grab';
+                container.style.userSelect = '';
+            };
+            
+            const onMouseUp = () => {
+                isDragging = false;
+                container.style.cursor = 'grab';
+                container.style.userSelect = '';
+            };
+            
+            const onMouseMove = (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                const x = e.pageX - container.offsetLeft;
+                const y = e.pageY - container.offsetTop;
+                const walkX = (x - startX) * 1.5;
+                const walkY = (y - startY) * 1.5;
+                container.scrollLeft = scrollLeft - walkX;
+                container.scrollTop = scrollTop - walkY;
+            };
+            
+            container.addEventListener('mousedown', onMouseDown);
+            container.addEventListener('mouseleave', onMouseLeave);
+            container.addEventListener('mouseup', onMouseUp);
+            container.addEventListener('mousemove', onMouseMove);
+            
+            container.dataset.dragInitialized = 'true';
+        }
+        
+        ['.pdf-preview-shell', '.docx-preview', '.pptx-preview-shell', '.xlsx-preview-shell']
+            .forEach(selector => {
+                document.querySelectorAll(selector).forEach(el => initDragPan(el));
+            });
+    }, 150);
+
     return [links.length]
 }
 """.replace(
@@ -195,6 +311,133 @@ fetch_api_key_js = """
 function(_, __) {
     api_key = getStorage('google_api_key', '');
     return [api_key, _];
+}
+"""
+
+# Auto-scroll answer panel to bottom
+scroll_answer_panel_js = """
+function() {
+    setTimeout(() => {
+        // Find the correct scrollable element - answer-panel is the scroll container
+        var answer_panel = document.querySelector("#answer-panel");
+        if (answer_panel) {
+            if (answer_panel.scrollHeight > answer_panel.clientHeight) {
+                answer_panel.scrollTop = answer_panel.scrollHeight;
+            } else {
+                var children = answer_panel.children;
+                for (var i = 0; i < children.length; i++) {
+                    var child = children[i];
+                    if (child && child.scrollHeight > child.clientHeight) {
+                        child.scrollTop = child.scrollHeight;
+                        break;
+                    }
+                }
+            }
+        }
+    }, 30);
+}
+"""
+
+# Enable drag-to-pan for all file previews
+preview_drag_pan_js = """
+function() {
+    function initDragPan(container) {
+        if (!container || container.dataset.dragInitialized === 'true') return;
+        
+        let isDragging = false;
+        let startX = 0, startY = 0;
+        let scrollLeft = 0, scrollTop = 0;
+        
+        const onMouseDown = (e) => {
+            isDragging = true;
+            startX = e.pageX - container.offsetLeft;
+            startY = e.pageY - container.offsetTop;
+            scrollLeft = container.scrollLeft;
+            scrollTop = container.scrollTop;
+            container.style.cursor = 'grabbing';
+            container.style.userSelect = 'none';
+            e.preventDefault();
+        };
+        
+        const onMouseLeave = () => {
+            isDragging = false;
+            container.style.cursor = 'grab';
+            container.style.userSelect = '';
+        };
+        
+        const onMouseUp = () => {
+            isDragging = false;
+            container.style.cursor = 'grab';
+            container.style.userSelect = '';
+        };
+        
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            const x = e.pageX - container.offsetLeft;
+            const y = e.pageY - container.offsetTop;
+            const walkX = (x - startX) * 1.5; // Scroll speed multiplier
+            const walkY = (y - startY) * 1.5;
+            container.scrollLeft = scrollLeft - walkX;
+            container.scrollTop = scrollTop - walkY;
+        };
+        
+        // Touch support
+        const onTouchStart = (e) => {
+            if (e.touches.length !== 1) return;
+            isDragging = true;
+            const touch = e.touches[0];
+            startX = touch.pageX - container.offsetLeft;
+            startY = touch.pageY - container.offsetTop;
+            scrollLeft = container.scrollLeft;
+            scrollTop = container.scrollTop;
+            e.preventDefault();
+        };
+        
+        const onTouchEnd = () => {
+            isDragging = false;
+        };
+        
+        const onTouchMove = (e) => {
+            if (!isDragging || e.touches.length !== 1) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const x = touch.pageX - container.offsetLeft;
+            const y = touch.pageY - container.offsetTop;
+            const walkX = (x - startX) * 1.5;
+            const walkY = (y - startY) * 1.5;
+            container.scrollLeft = scrollLeft - walkX;
+            container.scrollTop = scrollTop - walkY;
+        };
+        
+        // Mouse events
+        container.addEventListener('mousedown', onMouseDown);
+        container.addEventListener('mouseleave', onMouseLeave);
+        container.addEventListener('mouseup', onMouseUp);
+        container.addEventListener('mousemove', onMouseMove);
+        
+        // Touch events
+        container.addEventListener('touchstart', onTouchStart, { passive: false });
+        container.addEventListener('touchend', onTouchEnd);
+        container.addEventListener('touchmove', onTouchMove, { passive: false });
+        
+        container.dataset.dragInitialized = 'true';
+    }
+    
+    // Initialize on all preview containers
+    setTimeout(() => {
+        const selectors = [
+            '.pdf-preview-shell',
+            '.docx-preview',
+            '.pptx-preview-shell',
+            '.xlsx-preview-shell'
+        ];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => initDragPan(el));
+        });
+    }, 100);
 }
 """
 
@@ -426,6 +669,37 @@ class ChatPage(BasePage):
             plot = gr.update(visible=False)
         return plot
 
+    def _format_chat_message(self, content: str, role: str) -> str:
+        """Format a chat message as a bubble"""
+        import html
+        
+        escaped_content = html.escape(content)
+        return f'<div class="chat-message {role}"><div class="chat-message-content">{escaped_content}</div></div>'
+
+    def _generate_answer_panel_html(self, preserved_history: list, user_input: str, ai_response: str, is_thinking: bool = False) -> str:
+        """Generate HTML for answer panel with chat bubbles"""
+        messages_html = ""
+        
+        # Add preserved history (previous Q&A on the same page)
+        for item in preserved_history:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                user_msg, ai_msg = item
+                if user_msg:
+                    messages_html += self._format_chat_message(str(user_msg), "user")
+                if ai_msg:
+                    messages_html += self._format_chat_message(str(ai_msg), "assistant")
+        
+        # Add current exchange
+        if user_input:
+            messages_html += self._format_chat_message(user_input, "user")
+        
+        if is_thinking:
+            messages_html += '<div class="chat-message assistant"><div class="chat-message-content"><div class="typing-indicator"><span></span><span></span><span></span></div></div></div>'
+        elif ai_response:
+            messages_html += self._format_chat_message(ai_response, "assistant")
+        
+        return messages_html
+
     def rerun_page_answer(
         self,
         last_question,
@@ -532,6 +806,10 @@ class ChatPage(BasePage):
                     self.answer_panel,
                     self._page_outputs_cache,
                 ],
+                show_progress="hidden",
+            ).then(
+                fn=lambda: [],
+                outputs=[self.chat_panel.chatbot],
                 show_progress="hidden",
             ).then(
                 fn=lambda: "",
@@ -731,27 +1009,9 @@ class ChatPage(BasePage):
                     self._last_question,
                     self.info_panel,
                     self.answer_panel,
+                    self._active_file_id,
                 ],
                 outputs=[self._page_outputs_cache],
-                show_progress="hidden",
-            )
-            .then(
-                fn=self.page_preview.refresh_selected_file_preview,
-                inputs=[
-                    self.first_selector_choices,
-                    self._indices_input[1],
-                    self.chat_panel.page_number,
-                    self._active_file_total_pages,
-                ],
-                outputs=[
-                    self._active_file_id,
-                    self._active_file_name,
-                    self._active_file_path,
-                    self.chat_panel.page_number,
-                    self._active_file_total_pages,
-                    self.chat_panel.pdf_preview_src,
-                    self.chat_panel.pdf_preview_notice,
-                ],
                 show_progress="hidden",
             )
             .then(
@@ -763,7 +1023,13 @@ class ChatPage(BasePage):
                 fn=lambda: True,
                 inputs=None,
                 outputs=[self._preview_links],
-                js=pdfview_js,
+                js=pdfview_js,  # 这里已经包含了自动滚动和拖动初始化
+            )
+            .then(
+                fn=None,
+                inputs=None,
+                outputs=None,
+                js=scroll_answer_panel_js,
             )
             .success(
                 fn=self.check_and_suggest_name_conv,
@@ -804,8 +1070,7 @@ class ChatPage(BasePage):
             ],
             "show_progress": "hidden",
         }
-        # chat suggestion toggle
-        chat_event = chat_event.success(**onSuggestChatEvent)
+        # chat_event = chat_event.success(**onSuggestChatEvent)
 
         # final data persist
         if not KH_DEMO_MODE:
@@ -872,6 +1137,18 @@ class ChatPage(BasePage):
                 fn=lambda: "",
                 outputs=[self._last_question],
             ).then(
+                fn=self.suggest_chat_conv,
+                inputs=[
+                    self._app.settings_state,
+                    self.language,
+                    self.chat_panel.chatbot,
+                    self._use_suggestion,
+                ],
+                outputs=[
+                    self.followup_questions_ui,
+                    self.followup_questions,
+                ],
+            ).then(
                 fn=None,
                 inputs=None,
                 js=chat_input_focus_js,
@@ -914,6 +1191,18 @@ class ChatPage(BasePage):
             ).then(
                 fn=lambda: "",
                 outputs=[self._last_question],
+            ).then(
+                fn=self.suggest_chat_conv,
+                inputs=[
+                    self._app.settings_state,
+                    self.language,
+                    self.chat_panel.chatbot,
+                    self._use_suggestion,
+                ],
+                outputs=[
+                    self.followup_questions_ui,
+                    self.followup_questions,
+                ],
             ).then(
                 fn=None,
                 inputs=None,
@@ -1024,6 +1313,19 @@ class ChatPage(BasePage):
                 outputs=[
                     self.chat_control._new_delete,
                     self.chat_control._delete_confirm,
+                ],
+            )
+            .then(
+                fn=self.suggest_chat_conv,
+                inputs=[
+                    self._app.settings_state,
+                    self.language,
+                    self.chat_panel.chatbot,
+                    self._use_suggestion,
+                ],
+                outputs=[
+                    self.followup_questions_ui,
+                    self.followup_questions,
                 ],
             )
         )
@@ -1421,6 +1723,18 @@ class ChatPage(BasePage):
                     self.chat_control.btn_demo_login,
                 ],
             ).then(
+                fn=self.suggest_chat_conv,
+                inputs=[
+                    self._app.settings_state,
+                    self.language,
+                    self.chat_panel.chatbot,
+                    self._use_suggestion,
+                ],
+                outputs=[
+                    self.followup_questions_ui,
+                    self.followup_questions,
+                ],
+            ).then(
                 fn=None,
                 inputs=None,
                 js=chat_input_focus_js,
@@ -1688,8 +2002,11 @@ class ChatPage(BasePage):
         *selecteds,
     ):
         """Chat function"""
-        chat_input, chat_output = chat_history[-1]
-        chat_history = chat_history[:-1]
+        # Extract the latest user input and any existing output
+        chat_input, chat_output = chat_history[-1] if chat_history else ("", None)
+        
+        # Preserve the chat history excluding the latest entry which has the user input and None output
+        preserved_history = chat_history[:-1] if chat_history else []
 
         selection_marker = "[Selected text from current page]"
         if (not selected_page_text) and isinstance(chat_input, str):
@@ -1697,10 +2014,6 @@ class ChatPage(BasePage):
                 selected_page_text = chat_input.split(selection_marker, 1)[1].strip()
         if isinstance(chat_input, str) and selection_marker in chat_input:
             chat_input = chat_input.split(selection_marker, 1)[0].strip()
-
-        # if chat_input is empty, assume regen mode
-        if chat_output:
-            chat_state["app"]["regen"] = True
 
         queue: asyncio.Queue[Optional[dict]] = asyncio.Queue()
 
@@ -1728,17 +2041,22 @@ class ChatPage(BasePage):
         msg_placeholder = getattr(
             flowsettings, "KH_CHAT_MSG_PLACEHOLDER", "Thinking ..."
         )
+        
+        # Generate answer panel HTML with chat bubbles and thinking indicator
+        answer_html = self._generate_answer_panel_html(preserved_history, chat_input, "", is_thinking=True)
+        
+        # Initially show the user's question with a placeholder for AI response
         yield (
-            chat_history + [(chat_input, text or msg_placeholder)],
+            preserved_history + [(chat_input, text or msg_placeholder)],
             mindmap_html,
             plot_gr,
             plot,
             chat_state,
-            text,
+            answer_html,
         )
 
         try:
-            for response in pipeline.stream(chat_input, conversation_id, chat_history):
+            for response in pipeline.stream(chat_input, conversation_id, preserved_history):
 
                 if not isinstance(response, Document):
                     continue
@@ -1767,13 +2085,17 @@ class ChatPage(BasePage):
 
                 chat_state[pipeline.get_info()["id"]] = reasoning_state["pipeline"]
 
+                # Generate answer panel HTML with chat bubbles
+                answer_html = self._generate_answer_panel_html(preserved_history, chat_input, text, is_thinking=(not text))
+                
+                # Update the chat history with the latest response
                 yield (
-                    chat_history + [(chat_input, text or msg_placeholder)],
+                    preserved_history + [(chat_input, text or msg_placeholder)],
                     mindmap_html,
                     plot_gr,
                     plot,
                     chat_state,
-                    text,
+                    answer_html,
                 )
         except ValueError as e:
             logger.warning("Chat pipeline ValueError: %s", e)
@@ -1782,13 +2104,16 @@ class ChatPage(BasePage):
             empty_msg = getattr(
                 flowsettings, "KH_CHAT_EMPTY_MSG_PLACEHOLDER", "(Sorry, I don't know)"
             )
+            # Generate answer panel HTML with chat bubbles
+            answer_html = self._generate_answer_panel_html(preserved_history, chat_input, text or empty_msg, is_thinking=False)
+            
             yield (
-                chat_history + [(chat_input, text or empty_msg)],
+                preserved_history + [(chat_input, text or empty_msg)],
                 mindmap_html,
                 plot_gr,
                 plot,
                 chat_state,
-                text or empty_msg,
+                answer_html,
             )
 
     def check_and_suggest_name_conv(self, chat_history):
