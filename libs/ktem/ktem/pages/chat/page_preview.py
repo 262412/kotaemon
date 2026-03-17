@@ -350,6 +350,7 @@ class ChatPagePreviewController:
             gr.update(visible=False),
             None,
             ANSWER_PLACEHOLDER_TEXT,
+            [],  # Empty chat history
         )
 
     def get_cached_page_outputs(self, page_outputs_cache: dict, page_number: int, file_id: str = ""):
@@ -364,7 +365,9 @@ class ChatPagePreviewController:
         last_question = page_output.get("last_question", "") or ""
         mindmap_html = page_output.get("mindmap_html", "") or ""
         answer_text = page_output.get("answer_text", "") or ""
-        if not (last_question or mindmap_html or answer_text):
+        chat_history = page_output.get("chat_history", []) or []
+        
+        if not (last_question or mindmap_html or answer_text or chat_history):
             return self.clear_page_outputs()
 
         if not mindmap_html:
@@ -378,6 +381,7 @@ class ChatPagePreviewController:
             gr.update(visible=False),
             None,
             answer_text,
+            chat_history,  # Return chat history for the chatbot component
         )
 
     def cache_page_outputs(
@@ -388,6 +392,7 @@ class ChatPagePreviewController:
         mindmap_html: str,
         answer_text: str,
         file_id: str = "",
+        chat_history: list | None = None,
     ):
         if not isinstance(page_outputs_cache, dict):
             page_outputs_cache = {}
@@ -398,6 +403,7 @@ class ChatPagePreviewController:
             "last_question": last_question or "",
             "mindmap_html": mindmap_html or "",
             "answer_text": answer_text or "",
+            "chat_history": chat_history or [],  # Save chat history for this page
         }
         return updated_cache
 
@@ -413,6 +419,8 @@ class ChatPagePreviewController:
         page_number, total_pages, preview_src, preview_notice = self._build_preview_payload(
             file_id, file_name, file_path, 1, 1
         )
+        # Preserve page outputs cache for all files (don't clear it)
+        # Only clear the current display, not the cached data
         return (
             file_id,
             file_name,
@@ -422,7 +430,7 @@ class ChatPagePreviewController:
             preview_src,
             preview_notice,
             *self.clear_page_outputs(),
-            {},
+            page_outputs_cache,  # Return the cache as-is to preserve all page data
         )
 
     def on_page_change(
@@ -432,7 +440,19 @@ class ChatPagePreviewController:
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page change ignored for file {lock_key}, page={current_page}, delta={delta}")
-            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+            # Return gr.skip() for all 10 outputs to match the expected output count
+            return (
+                gr.skip(),  # page_number
+                gr.skip(),  # total_pages
+                gr.skip(),  # preview_src
+                gr.skip(),  # preview_notice
+                gr.skip(),  # last_question
+                gr.skip(),  # info_panel
+                gr.skip(),  # plot_panel
+                gr.skip(),  # state_plot_panel
+                gr.skip(),  # answer_panel
+                gr.skip(),  # chatbot
+            )
         
         try:
             self._page_change_lock[lock_key] = True
@@ -446,7 +466,7 @@ class ChatPagePreviewController:
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),
+                    *self.clear_page_outputs(),  # 6 values: last_question, mindmap_html, plot_panel, state_plot_panel, answer_text, chat_history
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -463,7 +483,7 @@ class ChatPagePreviewController:
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
             )
         finally:
             self._page_change_lock[lock_key] = False
@@ -489,7 +509,19 @@ class ChatPagePreviewController:
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page set ignored for file {lock_key}, page={current_page}")
-            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+            # Return gr.skip() for all 10 outputs to match the expected output count
+            return (
+                gr.skip(),  # page_number
+                gr.skip(),  # total_pages
+                gr.skip(),  # preview_src
+                gr.skip(),  # preview_notice
+                gr.skip(),  # last_question
+                gr.skip(),  # info_panel
+                gr.skip(),  # plot_panel
+                gr.skip(),  # state_plot_panel
+                gr.skip(),  # answer_panel
+                gr.skip(),  # chatbot
+            )
         
         try:
             self._page_change_lock[lock_key] = True
@@ -503,7 +535,7 @@ class ChatPagePreviewController:
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),
+                    *self.clear_page_outputs(),  # 6 values
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -519,7 +551,7 @@ class ChatPagePreviewController:
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
             )
         finally:
             self._page_change_lock[lock_key] = False

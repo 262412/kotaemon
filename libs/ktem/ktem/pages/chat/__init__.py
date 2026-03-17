@@ -687,7 +687,9 @@ class ChatPage(BasePage):
         import html
         
         escaped_content = html.escape(content)
-        return f'<div class="chat-message {role}"><div class="chat-message-content">{escaped_content}</div></div>'
+        # Replace newlines with <br> for proper line breaks
+        formatted_content = escaped_content.replace('\n', '<br>')
+        return f'<div class="chat-message {role}"><div class="chat-message-content">{formatted_content}</div></div>'
 
     def _generate_answer_panel_html(self, preserved_history: list, user_input: str, ai_response: str, is_thinking: bool = False) -> str:
         """Generate HTML for answer panel with chat bubbles"""
@@ -701,6 +703,8 @@ class ChatPage(BasePage):
                     messages_html += self._format_chat_message(str(user_msg), "user")
                 if ai_msg:
                     messages_html += self._format_chat_message(str(ai_msg), "assistant")
+                # Add separator between conversation turns
+                messages_html += '<div style="height: 8px;"></div>'
         
         # Add current exchange
         if user_input:
@@ -817,12 +821,9 @@ class ChatPage(BasePage):
                     self.plot_panel,
                     self.state_plot_panel,
                     self.answer_panel,
+                    self.chat_panel.chatbot,
                     self._page_outputs_cache,
                 ],
-                show_progress="hidden",
-            ).then(
-                fn=lambda: [],
-                outputs=[self.chat_panel.chatbot],
                 show_progress="hidden",
             ).then(
                 fn=lambda: "",
@@ -874,6 +875,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -906,6 +908,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -938,6 +941,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -1023,6 +1027,7 @@ class ChatPage(BasePage):
                     self.info_panel,
                     self.answer_panel,
                     self._active_file_id,
+                    self.chat_panel.chatbot,  # Pass chat history to save
                 ],
                 outputs=[self._page_outputs_cache],
                 show_progress="hidden",
@@ -1351,10 +1356,6 @@ class ChatPage(BasePage):
 
         onConvSelect = (
             onConvSelect.then(
-                fn=lambda: {},
-                outputs=[self._page_outputs_cache],
-                show_progress="hidden",
-            ).then(
                 fn=self.page_preview.refresh_selected_file_preview,
                 inputs=[
                     self.first_selector_choices,
