@@ -22,6 +22,13 @@ from .page_preview_resolver import PreviewFileResolver
 from .page_preview_service import PreviewPayloadService
 from .page_preview_spreadsheet import extract_xlsx_text
 from .page_preview_text import paginate_plain_text, read_text_file
+# Generation store for streaming outputs across page switches
+from .generation_store import (
+    get_snapshot_by_page,
+    has_in_progress,
+    make_page_key,
+    set_current_view,
+)
 # Import runtime utilities for PDF handling and page management
 from .page_preview_runtime import (
     build_pdfjs_viewer_src,
@@ -353,11 +360,41 @@ class ChatPagePreviewController:
             [],  # Empty chat history
         )
 
-    def get_cached_page_outputs(self, page_outputs_cache: dict, page_number: int, file_id: str = ""):
+    def get_cached_page_outputs(
+        self,
+        page_outputs_cache: dict,
+        page_number: int,
+        file_id: str = "",
+        session_key: str | None = None,
+    ):
+        page_key = make_page_key(file_id, page_number)
+
+        # Prefer in-progress generation snapshot if available (for live sync)
+        if session_key:
+            snapshot = get_snapshot_by_page(session_key, page_key)
+            if snapshot:
+                last_question = snapshot.get("last_question", "") or ""
+                mindmap_html = snapshot.get("mindmap_html", "") or ""
+                answer_html = snapshot.get("answer_html", "") or ""
+                chat_history = snapshot.get("chat_history", []) or []
+
+                if not mindmap_html:
+                    mindmap_html = MINDMAP_PLACEHOLDER_HTML
+                if not answer_html:
+                    answer_html = ANSWER_PLACEHOLDER_TEXT
+
+                return (
+                    last_question,
+                    mindmap_html,
+                    gr.update(visible=False),
+                    None,
+                    answer_html,
+                    chat_history,
+                )
+
         if not isinstance(page_outputs_cache, dict):
             return self.clear_page_outputs()
 
-        page_key = f"{file_id or 'default'}_{max(1, int(page_number or 1))}"
         page_output = page_outputs_cache.get(page_key, {})
         if not isinstance(page_output, dict):
             return self.clear_page_outputs()
@@ -366,7 +403,7 @@ class ChatPagePreviewController:
         mindmap_html = page_output.get("mindmap_html", "") or ""
         answer_text = page_output.get("answer_text", "") or ""
         chat_history = page_output.get("chat_history", []) or []
-        
+
         if not (last_question or mindmap_html or answer_text or chat_history):
             return self.clear_page_outputs()
 
@@ -408,7 +445,11 @@ class ChatPagePreviewController:
         return updated_cache
 
     def on_selected_file_change(
-        self, first_selector_choices, selected_file_ids, page_outputs_cache
+        self,
+        first_selector_choices,
+        selected_file_ids,
+        page_outputs_cache,
+        request: gr.Request | None = None,
     ):
         file_id, file_name, file_path = self.resolve_pdf_source(
             first_selector_choices, selected_file_ids
@@ -419,8 +460,18 @@ class ChatPagePreviewController:
         page_number, total_pages, preview_src, preview_notice = self._build_preview_payload(
             file_id, file_name, file_path, 1, 1
         )
+        session_key = (
+            request.session_hash
+            if request is not None and request.session_hash
+            else "default"
+        )
+        if session_key:
+            set_current_view(session_key, make_page_key(file_id, page_number))
+        page_outputs = self.get_cached_page_outputs(
+            page_outputs_cache, page_number, file_id, session_key=session_key
+        )
         # Preserve page outputs cache for all files (don't clear it)
-        # Only clear the current display, not the cached data
+        # Only clear the current display if nothing cached
         return (
             file_id,
             file_name,
@@ -429,14 +480,33 @@ class ChatPagePreviewController:
             total_pages,
             preview_src,
             preview_notice,
-            *self.clear_page_outputs(),
+            *page_outputs,
             page_outputs_cache,  # Return the cache as-is to preserve all page data
         )
 
     def on_page_change(
-        self, current_page, delta, file_id, file_path, page_outputs_cache, total_pages
+        self,
+        current_page,
+        delta,
+        file_id,
+        file_path,
+        page_outputs_cache,
+        total_pages,
+        request: gr.Request | None = None,
     ):
         lock_key = file_id or "default"
+        session_key = (
+            request.session_hash
+            if request is not None and request.session_hash
+            else "default"
+        )
+        if session_key and has_in_progress(
+            session_key, make_page_key(file_id, current_page)
+        ):
+            gr.Warning(
+                "A response is still being generated for the current page. "
+                "Switching pages won't stop it."
+            )
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page change ignored for file {lock_key}, page={current_page}, delta={delta}")
@@ -461,12 +531,19 @@ class ChatPagePreviewController:
                 _, total_pages, preview_src, preview_notice = self._build_preview_payload(
                     file_id, "", file_path, 1, 1
                 )
+                if session_key:
+                    set_current_view(session_key, make_page_key(file_id, 1))
                 return (
                     1,
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),  # 6 values: last_question, mindmap_html, plot_panel, state_plot_panel, answer_text, chat_history
+                    *self.get_cached_page_outputs(
+                        page_outputs_cache,
+                        1,
+                        file_id,
+                        session_key=session_key,
+                    ),
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -478,34 +555,76 @@ class ChatPagePreviewController:
                 requested_page,
                 total_pages,
             )
+            if session_key:
+                set_current_view(session_key, make_page_key(file_id, next_page))
             return (
                 next_page,
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
+                *self.get_cached_page_outputs(
+                    page_outputs_cache,
+                    next_page,
+                    file_id,
+                    session_key=session_key,
+                ),
             )
         finally:
             self._page_change_lock[lock_key] = False
 
     def on_prev_page(
-        self, current_page, file_id, file_path, page_outputs_cache, total_pages
+        self,
+        current_page,
+        file_id,
+        file_path,
+        page_outputs_cache,
+        total_pages,
+        request: gr.Request | None = None,
     ):
         return self.on_page_change(
-            current_page, -1, file_id, file_path, page_outputs_cache, total_pages
+            current_page,
+            -1,
+            file_id,
+            file_path,
+            page_outputs_cache,
+            total_pages,
+            request=request,
         )
 
     def on_next_page(
-        self, current_page, file_id, file_path, page_outputs_cache, total_pages
+        self,
+        current_page,
+        file_id,
+        file_path,
+        page_outputs_cache,
+        total_pages,
+        request: gr.Request | None = None,
     ):
         return self.on_page_change(
-            current_page, 1, file_id, file_path, page_outputs_cache, total_pages
+            current_page,
+            1,
+            file_id,
+            file_path,
+            page_outputs_cache,
+            total_pages,
+            request=request,
         )
 
     def on_page_set(
-        self, current_page, file_id, file_path, page_outputs_cache, total_pages
+        self,
+        current_page,
+        file_id,
+        file_path,
+        page_outputs_cache,
+        total_pages,
+        request: gr.Request | None = None,
     ):
         lock_key = file_id or "default"
+        session_key = (
+            request.session_hash
+            if request is not None and request.session_hash
+            else "default"
+        )
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page set ignored for file {lock_key}, page={current_page}")
@@ -530,12 +649,19 @@ class ChatPagePreviewController:
                 _, total_pages, preview_src, preview_notice = self._build_preview_payload(
                     file_id, "", file_path, 1, 1
                 )
+                if session_key:
+                    set_current_view(session_key, make_page_key(file_id, 1))
                 return (
                     1,
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),  # 6 values
+                    *self.get_cached_page_outputs(
+                        page_outputs_cache,
+                        1,
+                        file_id,
+                        session_key=session_key,
+                    ),
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -546,12 +672,19 @@ class ChatPagePreviewController:
                 current_page,
                 total_pages,
             )
+            if session_key:
+                set_current_view(session_key, make_page_key(file_id, next_page))
             return (
                 next_page,
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
+                *self.get_cached_page_outputs(
+                    page_outputs_cache,
+                    next_page,
+                    file_id,
+                    session_key=session_key,
+                ),
             )
         finally:
             self._page_change_lock[lock_key] = False
