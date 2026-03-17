@@ -1,9 +1,14 @@
+"""Chat panel component for displaying chatbot and document preview.
+
+Provides the main chat interface with integrated PDF/document preview and page navigation.
+"""
 import gradio as gr
 from ktem.app import BasePage
 from theflow.settings import settings as flowsettings
 
 KH_DEMO_MODE = getattr(flowsettings, "KH_DEMO_MODE", False)
 
+# Placeholder text shown in chatbot based on mode
 if not KH_DEMO_MODE:
     PLACEHOLDER_TEXT = (
         "This is the beginning of a new conversation.\n"
@@ -19,12 +24,16 @@ else:
 
 
 class ChatPanel(BasePage):
+    """Main chat panel with integrated document preview."""
+    
     def __init__(self, app):
         self._app = app
         self.text_input = None
         self.on_building_ui()
 
     def on_building_ui(self):
+        """Build the chat panel UI components."""
+        # Chatbot for displaying conversations
         self.chatbot = gr.Chatbot(
             label=self._app.app_name,
             placeholder=PLACEHOLDER_TEXT,
@@ -42,6 +51,7 @@ class ChatPanel(BasePage):
             ],
         )
 
+        # HTML-based PDF/document preview panel
         self.pdf_preview = gr.HTML(
             value=(
                 "<div class='pdf-preview-shell'>"
@@ -52,15 +62,20 @@ class ChatPanel(BasePage):
             ),
             elem_id="main-pdf-preview",
         )
+        # Hidden textbox storing the preview source URL
         self.pdf_preview_src = gr.Textbox(value="", visible=False, elem_id="main-pdf-preview-src")
-        self.preview_refresh_timer = gr.Timer(value=2.0, active=True)  # Optimized: 2s polling interval
+        # Timer for polling preview status (optimized to 2s interval)
+        self.preview_refresh_timer = gr.Timer(value=2.0, active=True)
 
     def render_notice_and_pager(self):
+        """Render PDF preview notice message and page navigation controls."""
+        # Notice message shown above PDF preview
         self.pdf_preview_notice = gr.HTML(
             value="<div class='pdf-preview-notice'>Select a PDF file to preview.</div>",
             elem_id="pdf-preview-notice",
         )
 
+        # Page navigation row with previous/next buttons and page number input
         with gr.Row(equal_height=True, elem_id="pdf-pager-row"):
             self.prev_page_btn = gr.Button("◀ Prev", scale=1, min_width=80)
             self.page_number = gr.Number(
@@ -76,7 +91,9 @@ class ChatPanel(BasePage):
             self.next_page_btn = gr.Button("Next ▶", scale=1, min_width=80)
 
     def render_input(self):
+        """Render the chat input box with multimodal support."""
         with gr.Row(elem_id="chat-input-row"):
+            # Multimodal input supporting text and file uploads
             self.text_input = gr.MultimodalTextbox(
                 interactive=True,
                 scale=20,
@@ -90,5 +107,13 @@ class ChatPanel(BasePage):
             )
 
     def submit_msg(self, chat_input, chat_history):
-        """Submit a message to the chatbot"""
+        """Submit a message to the chatbot.
+        
+        Args:
+            chat_input: User's input message
+            chat_history: Current chat history
+            
+        Returns:
+            Tuple of (empty string for clearing input, updated chat history)
+        """
         return "", chat_history + [(chat_input, None)]

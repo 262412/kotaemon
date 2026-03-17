@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 from kotaemon.loaders.pdf_loader import get_page_thumbnails
 
 from ...db.models import engine
+# Import preview handlers for different file types
 from .page_preview_document import (
     extract_docx_html,
     extract_docx_text,
@@ -21,6 +22,7 @@ from .page_preview_resolver import PreviewFileResolver
 from .page_preview_service import PreviewPayloadService
 from .page_preview_spreadsheet import extract_xlsx_text
 from .page_preview_text import paginate_plain_text, read_text_file
+# Import runtime utilities for PDF handling and page management
 from .page_preview_runtime import (
     build_pdfjs_viewer_src,
     clamp_page,
@@ -33,32 +35,54 @@ from .page_preview_runtime import (
 )
 from .page_preview_types import detect_office_extension, is_office_source, is_pdf_source
 
+# HTML placeholder shown when no mindmap is generated
 MINDMAP_PLACEHOLDER_HTML = (
     "<div class='page-result-placeholder'>"
     "Enter a question to generate a page-specific mindmap."
     "</div>"
 )
+# Message shown when no answer is available yet
 ANSWER_PLACEHOLDER_TEXT = "Ask a question about the current page to generate an answer."
 logger = logging.getLogger(__name__)
 
 
 class ChatPagePreviewController:
+    """Controller for managing page-level document preview and chat isolation.
+    
+    Handles document preview, page navigation, and maintains isolated chat history
+    for each page of each file. Supports PDF, Office documents, and text files.
+    """
+    
     def __init__(self, app):
         self._app = app
+        # Cache for page thumbnail images: {file_id: {page_num: thumbnail_base64}}
         self._page_thumbnail_cache: dict[str, dict[str, str]] = {}
+        # Cache for page preview content: {file_id: {page_num: preview_html}}
         self._page_preview_cache: dict[str, dict[str, str]] = {}
+        # Cache for total pages per file: {file_id: total_pages}
         self._total_pages_cache: dict[str, int] = {}
+        # Cache for non-PDF file previews: {file_id: [page_html_list]}
         self._non_pdf_preview_cache: dict[str, list[str]] = {}
+        # Cache for file names: {file_id: file_name}
         self._file_name_cache: dict[str, str] = {}
+        # Resolver for locating and loading files
         self._file_resolver = PreviewFileResolver(app, self._file_name_cache)
+        # Service for handling non-PDF file previews
         self._non_pdf_preview_service = NonPdfPreviewService(self)
+        # Service for handling PowerPoint presentations
         self._presentation_preview_service = PresentationPreviewService(self)
+        # Service for converting Office documents to PDF
         self._office_conversion = OfficePreviewConversionService(logger=logger)
+        # Service for building preview payloads
         self._preview_payload_service = PreviewPayloadService(self)
+        # Track last previewed file ID
         self._last_preview_file_id: str = ""
+        # Track file that should force first page display
         self._force_first_page_file_id: str = ""
+        # Track files that have shown Office placeholder
         self._office_placeholder_shown: set[str] = set()
-        self._page_change_lock: dict[str, bool] = {}  # file_id -> locked
+        # Lock to prevent concurrent page changes: {file_id: locked}
+        self._page_change_lock: dict[str, bool] = {}
 
     @staticmethod
     def _find_soffice_binary() -> str:
@@ -326,6 +350,7 @@ class ChatPagePreviewController:
             gr.update(visible=False),
             None,
             ANSWER_PLACEHOLDER_TEXT,
+            [],  # Empty chat history
         )
 
     def get_cached_page_outputs(self, page_outputs_cache: dict, page_number: int, file_id: str = ""):
@@ -340,7 +365,9 @@ class ChatPagePreviewController:
         last_question = page_output.get("last_question", "") or ""
         mindmap_html = page_output.get("mindmap_html", "") or ""
         answer_text = page_output.get("answer_text", "") or ""
-        if not (last_question or mindmap_html or answer_text):
+        chat_history = page_output.get("chat_history", []) or []
+        
+        if not (last_question or mindmap_html or answer_text or chat_history):
             return self.clear_page_outputs()
 
         if not mindmap_html:
@@ -354,6 +381,7 @@ class ChatPagePreviewController:
             gr.update(visible=False),
             None,
             answer_text,
+            chat_history,  # Return chat history for the chatbot component
         )
 
     def cache_page_outputs(
@@ -364,6 +392,7 @@ class ChatPagePreviewController:
         mindmap_html: str,
         answer_text: str,
         file_id: str = "",
+        chat_history: list | None = None,
     ):
         if not isinstance(page_outputs_cache, dict):
             page_outputs_cache = {}
@@ -374,6 +403,7 @@ class ChatPagePreviewController:
             "last_question": last_question or "",
             "mindmap_html": mindmap_html or "",
             "answer_text": answer_text or "",
+            "chat_history": chat_history or [],  # Save chat history for this page
         }
         return updated_cache
 
@@ -389,6 +419,8 @@ class ChatPagePreviewController:
         page_number, total_pages, preview_src, preview_notice = self._build_preview_payload(
             file_id, file_name, file_path, 1, 1
         )
+        # Preserve page outputs cache for all files (don't clear it)
+        # Only clear the current display, not the cached data
         return (
             file_id,
             file_name,
@@ -398,7 +430,7 @@ class ChatPagePreviewController:
             preview_src,
             preview_notice,
             *self.clear_page_outputs(),
-            {},
+            page_outputs_cache,  # Return the cache as-is to preserve all page data
         )
 
     def on_page_change(
@@ -408,7 +440,19 @@ class ChatPagePreviewController:
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page change ignored for file {lock_key}, page={current_page}, delta={delta}")
-            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+            # Return gr.skip() for all 10 outputs to match the expected output count
+            return (
+                gr.skip(),  # page_number
+                gr.skip(),  # total_pages
+                gr.skip(),  # preview_src
+                gr.skip(),  # preview_notice
+                gr.skip(),  # last_question
+                gr.skip(),  # info_panel
+                gr.skip(),  # plot_panel
+                gr.skip(),  # state_plot_panel
+                gr.skip(),  # answer_panel
+                gr.skip(),  # chatbot
+            )
         
         try:
             self._page_change_lock[lock_key] = True
@@ -422,7 +466,7 @@ class ChatPagePreviewController:
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),
+                    *self.clear_page_outputs(),  # 6 values: last_question, mindmap_html, plot_panel, state_plot_panel, answer_text, chat_history
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -439,7 +483,7 @@ class ChatPagePreviewController:
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
             )
         finally:
             self._page_change_lock[lock_key] = False
@@ -465,7 +509,19 @@ class ChatPagePreviewController:
         
         if self._page_change_lock.get(lock_key, False):
             logger.debug(f"Page set ignored for file {lock_key}, page={current_page}")
-            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+            # Return gr.skip() for all 10 outputs to match the expected output count
+            return (
+                gr.skip(),  # page_number
+                gr.skip(),  # total_pages
+                gr.skip(),  # preview_src
+                gr.skip(),  # preview_notice
+                gr.skip(),  # last_question
+                gr.skip(),  # info_panel
+                gr.skip(),  # plot_panel
+                gr.skip(),  # state_plot_panel
+                gr.skip(),  # answer_panel
+                gr.skip(),  # chatbot
+            )
         
         try:
             self._page_change_lock[lock_key] = True
@@ -479,7 +535,7 @@ class ChatPagePreviewController:
                     total_pages,
                     preview_src,
                     preview_notice,
-                    *self.clear_page_outputs(),
+                    *self.clear_page_outputs(),  # 6 values
                 )
 
             file_name = self._resolve_file_name_by_file_id(file_id)
@@ -495,7 +551,7 @@ class ChatPagePreviewController:
                 total_pages,
                 preview_src,
                 preview_notice,
-                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),
+                *self.get_cached_page_outputs(page_outputs_cache, next_page, file_id),  # 6 values
             )
         finally:
             self._page_change_lock[lock_key] = False

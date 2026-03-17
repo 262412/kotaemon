@@ -8,17 +8,55 @@ import time
 from .page_preview_runtime import get_file_signature, get_pdf_preview_dir, is_valid_pdf
 from .page_preview_types import detect_office_extension, is_office_source
 
+# ============================================================================
+# TODO: 性能优化留底 - Office 文件处理
+# ============================================================================
+# 
+# 当前问题：
+#   1. DOC/DOCX、PPT、Excel 文件依赖 LibreOffice 后台转 PDF
+#   2. 转换延迟明显（2-10 秒），服务器资源占用高
+#   3. 并发能力差，多文件同时转换会卡死
+#
+# 潜在优化方向：
+#   1. 异步转换 + 进度提示（用户等待时显示转换进度）
+#   2. 增量转换（只转换变化的页面）
+#   3. 预转换（上传时立即转换，而非首次访问时）
+#   4. 分布式转换（专用转换服务队列）
+#   5. 缓存优化（长期缓存 + 失效策略）
+#
+# ============================================================================
+
 
 class OfficePreviewConversionService:
+    """Service for converting Office documents to PDF for preview.
+    
+    Uses LibreOffice in headless mode to convert DOC/DOCX, PPT/PPTX, XLS/XLSX
+    files to PDF format. Maintains a cache to avoid re-conversion.
+    """
+    
     def __init__(self, logger: logging.Logger | None = None):
         self._logger = logger or logging.getLogger(__name__)
+        # Cache for converted PDF paths: {file_signature: pdf_path}
         self._office_pdf_cache: dict[str, str] = {}
+        # Status of conversion jobs: {file_signature: status_message}
         self._office_pdf_job_status: dict[str, str] = {}
+        # Timestamp of conversion jobs: {file_signature: timestamp}
         self._office_pdf_job_ts: dict[str, float] = {}
+        # Thread lock for managing concurrent conversions
         self._office_pdf_job_lock = threading.Lock()
 
     @staticmethod
     def find_soffice_binary() -> str:
+        """Find LibreOffice soffice binary path.
+        
+        Searches in order:
+        1. SOFFICE_PATH environment variable
+        2. System PATH using shutil.which()
+        3. Common installation paths on Linux, macOS, and Windows
+        
+        Returns:
+            Path to soffice binary or empty string if not found
+        """
         # 1. Check environment variable first (works on all platforms)
         env_path = os.environ.get("SOFFICE_PATH", "").strip()
         if env_path and os.path.isfile(env_path):
@@ -64,6 +102,14 @@ class OfficePreviewConversionService:
         return ""
 
     def get_status(self, file_path: str) -> str:
+        """Get the status of an Office to PDF conversion job.
+        
+        Args:
+            file_path: Path to the Office document
+            
+        Returns:
+            Status message or empty string if no job found
+        """
         if not file_path:
             return ""
         job_key = get_file_signature(file_path)
@@ -71,6 +117,18 @@ class OfficePreviewConversionService:
             return self._office_pdf_job_status.get(job_key, "")
 
     def convert_to_pdf_preview(self, file_path: str, file_name: str) -> str:
+        """Convert Office document to PDF for preview.
+        
+        Converts DOC/DOCX, PPT/PPTX, XLS/XLSX files to PDF using LibreOffice.
+        Caches the result to avoid re-conversion.
+        
+        Args:
+            file_path: Path to the Office document
+            file_name: Name of the file (used to detect extension)
+            
+        Returns:
+            Path to the converted PDF file, or empty string if conversion fails
+        """
         if not file_path or not os.path.isfile(file_path):
             return ""
         ext = detect_office_extension(file_name, file_path)

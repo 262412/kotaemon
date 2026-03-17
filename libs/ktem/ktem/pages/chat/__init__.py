@@ -53,15 +53,19 @@ if KH_WEB_SEARCH_BACKEND:
     except (ImportError, AttributeError) as e:
         logger.warning("Error importing %s: %s", KH_WEB_SEARCH_BACKEND, e)
 
+# Maximum number of reasoning iterations allowed (limited in demo mode)
 REASONING_LIMITS = 2 if KH_DEMO_MODE else 10
 DEFAULT_SETTING = "(default)"
+# Scale factors for info panel expansion (expanded: 8, collapsed: 4)
 INFO_PANEL_SCALES = {True: 8, False: 4}
+# Default question for document summarization
 DEFAULT_QUESTION = (
     "What is the summary of this document?"
     if not KH_DEMO_MODE
     else "What is the summary of this paper?"
 )
 
+# JavaScript to focus chat input after actions
 chat_input_focus_js = """
 function() {
     let chatInput = document.querySelector("#chat-input textarea");
@@ -69,6 +73,7 @@ function() {
 }
 """
 
+# JavaScript to submit URL input by simulating Enter key press
 quick_urls_submit_js = """
 function() {
     let urlInput = document.querySelector("#quick-url-demo textarea");
@@ -76,6 +81,7 @@ function() {
 }
 """
 
+# JavaScript to handle recommended paper clicks and auto-submit URLs
 recommended_papers_js = """
 function() {
     // Get all links and attach click event
@@ -105,6 +111,7 @@ function() {
 }
 """
 
+# JavaScript to clear text selection highlighting from bot messages
 clear_bot_message_selection_js = """
 function() {
     var bot_messages = document.querySelectorAll(
@@ -459,20 +466,26 @@ class ChatPage(BasePage):
         self._info_panel_expanded = gr.State(value=True)
         self._command_state = gr.State(value=None)
         self._user_api_key = gr.Text(value="", visible=False)
+        # Active file information states
         self._active_file_id = gr.State(value="")
         self._active_file_name = gr.State(value="")
         self._active_file_path = gr.State(value="")
         self._active_file_total_pages = gr.State(value=1)
+        # Page-level output cache for chat isolation: {file_id_page_num: {last_question, mindmap_html, answer_text, chat_history}}
         self._page_outputs_cache = gr.State(value={})
+        # Last question asked about the current page
         self._last_question = gr.State(value="")
 
     def on_building_ui(self):
         with gr.Row():
+            # Chat history state (not used for page-level isolation)
             self.state_chat = gr.State(STATE)
+            # Retrieval and plot history states
             self.state_retrieval_history = gr.State([])
             self.state_plot_history = gr.State([])
             self.state_plot_panel = gr.State(None)
             self.first_selector_choices = gr.State(None)
+            # Selected text from the current page for targeted questions
             self._selected_page_text = gr.Textbox(
                 value="", visible=False, elem_id="selected-page-text"
             )
@@ -674,7 +687,9 @@ class ChatPage(BasePage):
         import html
         
         escaped_content = html.escape(content)
-        return f'<div class="chat-message {role}"><div class="chat-message-content">{escaped_content}</div></div>'
+        # Replace newlines with <br> for proper line breaks
+        formatted_content = escaped_content.replace('\n', '<br>')
+        return f'<div class="chat-message {role}"><div class="chat-message-content">{formatted_content}</div></div>'
 
     def _generate_answer_panel_html(self, preserved_history: list, user_input: str, ai_response: str, is_thinking: bool = False) -> str:
         """Generate HTML for answer panel with chat bubbles"""
@@ -688,6 +703,8 @@ class ChatPage(BasePage):
                     messages_html += self._format_chat_message(str(user_msg), "user")
                 if ai_msg:
                     messages_html += self._format_chat_message(str(ai_msg), "assistant")
+                # Add separator between conversation turns
+                messages_html += '<div style="height: 8px;"></div>'
         
         # Add current exchange
         if user_input:
@@ -804,12 +821,9 @@ class ChatPage(BasePage):
                     self.plot_panel,
                     self.state_plot_panel,
                     self.answer_panel,
+                    self.chat_panel.chatbot,
                     self._page_outputs_cache,
                 ],
-                show_progress="hidden",
-            ).then(
-                fn=lambda: [],
-                outputs=[self.chat_panel.chatbot],
                 show_progress="hidden",
             ).then(
                 fn=lambda: "",
@@ -861,6 +875,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -893,6 +908,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -925,6 +941,7 @@ class ChatPage(BasePage):
                 self.plot_panel,
                 self.state_plot_panel,
                 self.answer_panel,
+                self.chat_panel.chatbot,  # Add chatbot to restore page-specific history
             ],
             show_progress="hidden",
         ).then(
@@ -1010,6 +1027,7 @@ class ChatPage(BasePage):
                     self.info_panel,
                     self.answer_panel,
                     self._active_file_id,
+                    self.chat_panel.chatbot,  # Pass chat history to save
                 ],
                 outputs=[self._page_outputs_cache],
                 show_progress="hidden",
@@ -1338,10 +1356,6 @@ class ChatPage(BasePage):
 
         onConvSelect = (
             onConvSelect.then(
-                fn=lambda: {},
-                outputs=[self._page_outputs_cache],
-                show_progress="hidden",
-            ).then(
                 fn=self.page_preview.refresh_selected_file_preview,
                 inputs=[
                     self.first_selector_choices,

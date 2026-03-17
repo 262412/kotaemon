@@ -327,6 +327,7 @@ button.selected {
   max-width: 85%;
   position: relative;
   word-wrap: break-word;
+  white-space: normal;
 }
 
 #answer-panel .chat-message.user {
@@ -345,6 +346,8 @@ button.selected {
 
 #answer-panel .chat-message-content {
   line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 #answer-panel .typing-indicator {
