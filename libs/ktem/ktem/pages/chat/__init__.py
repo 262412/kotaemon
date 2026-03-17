@@ -34,6 +34,19 @@ from ...utils.commands import WEB_SEARCH_COMMAND
 from ...utils.hf_papers import get_recommended_papers
 from ...utils.rate_limit import check_rate_limit
 from .chat_panel import ChatPanel
+from .generation_store import (
+    get_current_view,
+    init_cache_entry,
+    make_page_key,
+    make_request_key,
+    mark_done,
+    mark_error,
+    set_current_view,
+    update_answer,
+    update_mindmap,
+    update_plot,
+    update_reasoning_state,
+)
 from .page_preview import ChatPagePreviewController
 from .chat_suggestion import ChatSuggestion
 from .common import STATE
@@ -475,6 +488,13 @@ class ChatPage(BasePage):
         self._page_outputs_cache = gr.State(value={})
         # Last question asked about the current page
         self._last_question = gr.State(value="")
+        # Request-scoped outputs for page-safe caching/persistence
+        self._request_page_number = gr.State(value=1)
+        self._request_file_id = gr.State(value="")
+        self._request_last_question = gr.State(value="")
+        self._request_info_html = gr.State(value="")
+        self._request_answer_html = gr.State(value="")
+        self._request_chat_history = gr.State(value=[])
 
     def on_building_ui(self):
         with gr.Row():
@@ -745,6 +765,12 @@ class ChatPage(BasePage):
                 None,
                 chat_state,
                 "",
+                max(1, int(page_number or 1)),
+                active_file_id or "",
+                "",
+                "",
+                "",
+                [],
             )
 
         rerun_history = chat_history
@@ -782,6 +808,12 @@ class ChatPage(BasePage):
                 None,
                 chat_state,
                 "",
+                max(1, int(page_number or 1)),
+                active_file_id or "",
+                "",
+                "",
+                "",
+                [],
             )
 
         return final_output
@@ -1014,6 +1046,12 @@ class ChatPage(BasePage):
                     self.state_plot_panel,
                     self.state_chat,
                     self.answer_panel,
+                    self._request_page_number,
+                    self._request_file_id,
+                    self._request_last_question,
+                    self._request_info_html,
+                    self._request_answer_html,
+                    self._request_chat_history,
                 ],
                 concurrency_limit=20,
                 show_progress="minimal",
@@ -1022,12 +1060,12 @@ class ChatPage(BasePage):
                 fn=self.page_preview.cache_page_outputs,
                 inputs=[
                     self._page_outputs_cache,
-                    self.chat_panel.page_number,
-                    self._last_question,
-                    self.info_panel,
-                    self.answer_panel,
-                    self._active_file_id,
-                    self.chat_panel.chatbot,  # Pass chat history to save
+                    self._request_page_number,
+                    self._request_last_question,
+                    self._request_info_html,
+                    self._request_answer_html,
+                    self._request_file_id,
+                    self._request_chat_history,  # Pass request-scoped chat history
                 ],
                 outputs=[self._page_outputs_cache],
                 show_progress="hidden",
@@ -1051,7 +1089,7 @@ class ChatPage(BasePage):
             )
             .success(
                 fn=self.check_and_suggest_name_conv,
-                inputs=self.chat_panel.chatbot,
+                inputs=self._request_chat_history,
                 outputs=[
                     self.chat_control.conversation_rn,
                     self._conversation_renamed,
@@ -1097,11 +1135,11 @@ class ChatPage(BasePage):
                 inputs=[
                     self.chat_control.conversation_id,
                     self._app.user_id,
-                    self.info_panel,
+                    self._request_info_html,
                     self.state_plot_panel,
                     self.state_retrieval_history,
                     self.state_plot_history,
-                    self.chat_panel.chatbot,
+                    self._request_chat_history,
                     self.state_chat,
                 ]
                 + self._indices_input,
@@ -2014,6 +2052,7 @@ class ChatPage(BasePage):
         page_number,
         selected_page_text,
         *selecteds,
+        request: gr.Request | None = None,
     ):
         """Chat function"""
         # Extract the latest user input and any existing output
@@ -2028,6 +2067,27 @@ class ChatPage(BasePage):
                 selected_page_text = chat_input.split(selection_marker, 1)[1].strip()
         if isinstance(chat_input, str) and selection_marker in chat_input:
             chat_input = chat_input.split(selection_marker, 1)[0].strip()
+
+        session_key = (
+            request.session_hash
+            if request is not None and request.session_hash
+            else "default"
+        )
+        normalized_page_number = max(1, int(page_number or 1))
+        page_key = make_page_key(active_file_id, normalized_page_number)
+        if session_key:
+            set_current_view(session_key, page_key)
+        request_key = make_request_key(session_key or "default", page_key)
+
+        init_cache_entry(
+            request_key=request_key,
+            session_key=session_key,
+            page_key=page_key,
+            file_id=active_file_id or "",
+            page_number=normalized_page_number,
+            last_question=str(chat_input or ""),
+            preserved_history=preserved_history,
+        )
 
         queue: asyncio.Queue[Optional[dict]] = asyncio.Queue()
 
@@ -2055,18 +2115,41 @@ class ChatPage(BasePage):
         msg_placeholder = getattr(
             flowsettings, "KH_CHAT_MSG_PLACEHOLDER", "Thinking ..."
         )
-        
+
+        def is_active_view() -> bool:
+            current_view = get_current_view(session_key) if session_key else None
+            return (current_view is None) or (current_view == page_key)
+
         # Generate answer panel HTML with chat bubbles and thinking indicator
-        answer_html = self._generate_answer_panel_html(preserved_history, chat_input, "", is_thinking=True)
-        
+        answer_html = self._generate_answer_panel_html(
+            preserved_history, chat_input, "", is_thinking=True
+        )
+        chat_history_full = preserved_history + [(chat_input, text or msg_placeholder)]
+
+        update_answer(
+            request_key,
+            answer_text=text,
+            answer_html=answer_html,
+            chat_history=chat_history_full,
+        )
+        update_mindmap(request_key, mindmap_html)
+        update_plot(request_key, plot)
+
         # Initially show the user's question with a placeholder for AI response
+        active_view = is_active_view()
         yield (
-            preserved_history + [(chat_input, text or msg_placeholder)],
-            mindmap_html,
-            plot_gr,
+            chat_history_full if active_view else gr.skip(),
+            mindmap_html if active_view else gr.skip(),
+            plot_gr if active_view else gr.skip(),
             plot,
             chat_state,
+            answer_html if active_view else gr.skip(),
+            normalized_page_number,
+            active_file_id or "",
+            str(chat_input or ""),
+            mindmap_html,
             answer_html,
+            chat_history_full,
         )
 
         try:
@@ -2098,37 +2181,83 @@ class ChatPage(BasePage):
                     plot_gr = self._json_to_plot(plot)
 
                 chat_state[pipeline.get_info()["id"]] = reasoning_state["pipeline"]
+                update_reasoning_state(request_key, reasoning_state["pipeline"])
 
                 # Generate answer panel HTML with chat bubbles
-                answer_html = self._generate_answer_panel_html(preserved_history, chat_input, text, is_thinking=(not text))
-                
+                answer_html = self._generate_answer_panel_html(
+                    preserved_history, chat_input, text, is_thinking=(not text)
+                )
+                chat_history_full = preserved_history + [
+                    (chat_input, text or msg_placeholder)
+                ]
+
+                update_answer(
+                    request_key,
+                    answer_text=text,
+                    answer_html=answer_html,
+                    chat_history=chat_history_full,
+                )
+                update_mindmap(request_key, mindmap_html)
+                update_plot(request_key, plot)
+
                 # Update the chat history with the latest response
+                active_view = is_active_view()
                 yield (
-                    preserved_history + [(chat_input, text or msg_placeholder)],
-                    mindmap_html,
-                    plot_gr,
+                    chat_history_full if active_view else gr.skip(),
+                    mindmap_html if active_view else gr.skip(),
+                    plot_gr if active_view else gr.skip(),
                     plot,
                     chat_state,
+                    answer_html if active_view else gr.skip(),
+                    normalized_page_number,
+                    active_file_id or "",
+                    str(chat_input or ""),
+                    mindmap_html,
                     answer_html,
+                    chat_history_full,
                 )
         except ValueError as e:
             logger.warning("Chat pipeline ValueError: %s", e)
+            mark_error(request_key, str(e))
 
         if not text:
             empty_msg = getattr(
-                flowsettings, "KH_CHAT_EMPTY_MSG_PLACEHOLDER", "(Sorry, I don't know)"
+                flowsettings,
+                "KH_CHAT_EMPTY_MSG_PLACEHOLDER",
+                "(Sorry, I don't know)",
             )
             # Generate answer panel HTML with chat bubbles
-            answer_html = self._generate_answer_panel_html(preserved_history, chat_input, text or empty_msg, is_thinking=False)
-            
+            answer_html = self._generate_answer_panel_html(
+                preserved_history, chat_input, text or empty_msg, is_thinking=False
+            )
+            chat_history_full = preserved_history + [(chat_input, text or empty_msg)]
+
+            update_answer(
+                request_key,
+                answer_text=text or empty_msg,
+                answer_html=answer_html,
+                chat_history=chat_history_full,
+            )
+            update_mindmap(request_key, mindmap_html)
+            update_plot(request_key, plot)
+
+            active_view = is_active_view()
             yield (
-                preserved_history + [(chat_input, text or empty_msg)],
-                mindmap_html,
-                plot_gr,
+                chat_history_full if active_view else gr.skip(),
+                mindmap_html if active_view else gr.skip(),
+                plot_gr if active_view else gr.skip(),
                 plot,
                 chat_state,
+                answer_html if active_view else gr.skip(),
+                normalized_page_number,
+                active_file_id or "",
+                str(chat_input or ""),
+                mindmap_html,
                 answer_html,
+                chat_history_full,
             )
+
+        mark_done(request_key)
 
     def check_and_suggest_name_conv(self, chat_history):
         suggest_pipeline = SuggestConvNamePipeline()

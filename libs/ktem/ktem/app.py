@@ -7,6 +7,7 @@ import pluggy
 from ktem import extension_protocol
 from ktem.assets import PDFJS_PREBUILT_DIR, KotaemonTheme
 from ktem.components import reasonings
+from ktem.utils.dependencies import DependencyChecker
 from ktem.exceptions import HookAlreadyDeclared, HookNotDeclared
 from ktem.index import IndexManager
 from ktem.settings import BaseSettingGroup, SettingGroup, SettingReasoningGroup
@@ -74,6 +75,9 @@ class BaseApp:
         self.register_extensions()
         self.register_reasonings()
         self.initialize_indices()
+        
+        # Check external dependencies on startup
+        DependencyChecker.check_all(verbose=True)
 
         self.default_settings.reasoning.finalize()
         self.default_settings.index.finalize()
