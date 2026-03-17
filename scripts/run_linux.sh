@@ -171,6 +171,18 @@ function download_and_unzip() {
 
 function launch_ui() {
     local pdfjs_prebuilt_dir=$1
+    
+    # Check if PDF.js exists, download if not
+    if [ ! -f "$pdfjs_prebuilt_dir/web/viewer.html" ]; then
+        echo "⚠️  PDF.js not found, downloading automatically..."
+        bash scripts/download_pdfjs.sh "$pdfjs_prebuilt_dir" || {
+            echo "❌ Failed to download PDF.js. Please run manually:"
+            echo "   bash scripts/download_pdfjs.sh $pdfjs_prebuilt_dir"
+            exit 1
+        }
+        echo "✅ PDF.js downloaded successfully!"
+    fi
+    
     PDFJS_PREBUILT_DIR="$pdfjs_prebuilt_dir" python $(pwd)/app.py || {
         echo "" && echo "Will exit now..."
         exit 1

@@ -274,7 +274,20 @@ GOTO :eof
 :: Workaround for diskcache path with folder start with .
 SET THEFLOW_TEMP_PATH=flow_tmp
 SET PDFJS_PREBUILT_DIR=%target_pdf_js_dir%
-ECHO Starting Kotaemon UI... (prebuilt PDF.js is at %PDFJS_PREBUILT_DIR%)
+
+:: Check if PDF.js exists, download if not
+if not exist "%PDFJS_PREBUILT_DIR%\web\viewer.html" (
+    echo PDF.js not found, downloading...
+    call :download_and_extract_pdf_js
+    if errorlevel 1 (
+        echo Failed to download PDF.js. Please run manually:
+        echo scripts\run_windows.bat
+        GOTO :exit_func_with_error
+    )
+    echo PDF.js downloaded successfully!
+)
+
+echo Starting Kotaemon UI... (prebuilt PDF.js is at %PDFJS_PREBUILT_DIR%)
 CALL python -Xutf8 "%CD%\app.py" || ( ECHO. && ECHO Will exit now... && GOTO :exit_func_with_error )
 GOTO :eof
 
