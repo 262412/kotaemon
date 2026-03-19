@@ -450,30 +450,69 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# PDF files
+### Project-specific ###
+# Application data (large files, caches, temp data)
+ktem_app_data/
+gradio_tmp/
+chunks_cache_dir/
+markdown_cache_dir/
+zip_cache_dir/
+zip_cache_dir_in/
+
+# Benchmark results and figures (generated)
+results/
+figures/
+benchmark/artifacts/
+data/benchmarks/
+data/test_documents/
+
+# Model weights and embeddings (large files)
+*.bin
+*.pt
+*.pth
+*.onnx
+models/
+embeddings/
+
+# Logs
+logs/
+*.log
+
+# Environment
+.env
+.envrc
+.env.local
+
+# IDE
+.idea/
+.vscode/*.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# PDF files (except test resources)
 *.pdf
 !libs/kotaemon/tests/resources/*.pdf
 
+# Flow cache
 .theflow/
 
-# End of https://www.toptal.com/developers/gitignore/api/python,linux,macos,windows,vim,emacs,visualstudiocode,pycharm
-*.py[coid]
-
-logs/
+# GPG
 .gitsecret/keys/random_seed
-!*.secret
-.envrc
-.env
-
 S.gpg-agent*
-.vscode/settings.json
-examples/example1/assets
-storage/*
 
-# Conda and env storages
+# Conda and env
 *install_dir/
 doc_env/
-
-# application data
-ktem_app_data/
-gradio_tmp/
