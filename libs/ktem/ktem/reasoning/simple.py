@@ -1,5 +1,7 @@
 import logging
+import os
 import threading
+from copy import deepcopy
 from textwrap import dedent
 from typing import Generator
 
@@ -117,7 +119,6 @@ class FullQAPipeline(BaseReasoning):
         #     query = self.add_query_context(message, history).content
         # else:
         #     query = message
-        # print(f"Rewritten query: {query}")
         query = None
         if not query:
             # TODO: previously return [], [] because we think this message as something
@@ -127,9 +128,88 @@ class FullQAPipeline(BaseReasoning):
         docs, doc_ids = [], []
         plot_docs = []
 
+        active_file_id = str(getattr(self, "active_file_id", "") or "")
+        active_file_name = getattr(self, "active_file_name", "")
+        page_number = getattr(self, "page_number", None)
+        selected_text = getattr(self, "selected_text", "") or ""
+        selected_text_norm = " ".join(selected_text.lower().split())
+        active_file_name_norm = os.path.basename(str(active_file_name or "")).lower()
+
+        def _doc_with_only_selected_text(doc: RetrievedDocument) -> RetrievedDocument:
+            selected_doc = deepcopy(doc)
+            try:
+                selected_doc.text = selected_text
+            except Exception:
+                pass
+            try:
+                selected_doc.content = selected_text
+            except Exception:
+                pass
+            return selected_doc
+
+        def _normalize_file_name(file_name: str) -> str:
+            return os.path.basename(str(file_name or "")).lower()
+
+        def _is_active_file_doc(doc: RetrievedDocument) -> bool:
+            if not active_file_name and not active_file_id:
+                return True
+
+            doc_file_id = str(doc.metadata.get("file_id", "") or "")
+            if active_file_id and doc_file_id:
+                return doc_file_id == active_file_id
+
+            if not active_file_name:
+                return True
+
+            doc_file_name = _normalize_file_name(doc.metadata.get("file_name", ""))
+            return bool(doc_file_name) and doc_file_name == active_file_name_norm
+
+        def _is_current_page_doc(doc: RetrievedDocument) -> bool:
+            if not page_number:
+                return True
+
+            page_label = doc.metadata.get("page_label", None)
+            if page_label is None:
+                return False
+
+            try:
+                return int(page_label) == int(page_number)
+            except Exception:
+                return False
+
         for idx, retriever in enumerate(self.retrievers):
             retriever_node = self._prepare_child(retriever, f"retriever_{idx}")
             retriever_docs = retriever_node(text=query)
+
+            retriever_docs = [doc for doc in retriever_docs if _is_active_file_doc(doc)]
+            if page_number:
+                page_docs = [doc for doc in retriever_docs if _is_current_page_doc(doc)]
+                if page_docs:
+                    retriever_docs = page_docs
+
+            if selected_text_norm:
+                selected_filtered_docs = []
+                for doc in retriever_docs:
+                    doc_text = (doc.text or "") if hasattr(doc, "text") else ""
+                    doc_text_norm = " ".join(doc_text.lower().split())
+                    if selected_text_norm in doc_text_norm:
+                        selected_filtered_docs.append(doc)
+                if selected_filtered_docs:
+                    retriever_docs = [
+                        _doc_with_only_selected_text(selected_filtered_docs[0])
+                    ]
+                elif retriever_docs:
+                    retriever_docs = [_doc_with_only_selected_text(retriever_docs[0])]
+                else:
+                    retriever_docs = [
+                        RetrievedDocument(
+                            text=selected_text,
+                            metadata={
+                                "file_id": active_file_id,
+                                "file_name": active_file_name,
+                            },
+                        )
+                    ]
 
             retriever_docs_text = []
             retriever_docs_plot = []
@@ -177,7 +257,11 @@ class FullQAPipeline(BaseReasoning):
                     activeNode:
                         placement: center
                     initialExpandLevel: 4
-                    maxWidth: 200
+                    maxWidth: 300
+                    extraJs:
+                        - https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js
+                    extraCss:
+                        - https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css
                 ---
                 {}
                 </script>
@@ -212,7 +296,7 @@ class FullQAPipeline(BaseReasoning):
             try:
                 citation_plot = self.create_citation_viz_pipeline(doc_texts, question)
             except Exception as e:
-                print("Failed to create citation plot:", e)
+                logger.warning("Failed to create citation plot: %s", e)
 
             if citation_plot:
                 plot = to_json(citation_plot)
@@ -282,14 +366,9 @@ class FullQAPipeline(BaseReasoning):
         self, message: str, conv_id: str, history: list, **kwargs  # type: ignore
     ) -> Generator[Document, None, Document]:
         if self.use_rewrite and self.rewrite_pipeline:
-            print("Chosen rewrite pipeline", self.rewrite_pipeline)
             message = self.rewrite_pipeline(question=message).text
-            print("Rewrite result", message)
-
-        print(f"Retrievers {self.retrievers}")
         # should populate the context
         docs, infos = self.retrieve(message, history)
-        print(f"Got {len(docs)} retrieved documents")
         yield from infos
 
         evidence_mode, evidence, images = self.evidence_pipeline(docs).content
@@ -379,6 +458,7 @@ class FullQAPipeline(BaseReasoning):
         answer_pipeline.lang = SUPPORTED_LANGUAGE_MAP.get(
             settings["reasoning.lang"], "English"
         )
+        answer_pipeline.create_mindmap_pipeline.lang = answer_pipeline.lang
 
         pipeline.add_query_context.llm = llm
         pipeline.add_query_context.n_last_interactions = settings[
@@ -497,7 +577,6 @@ class FullDecomposeQAPipeline(FullQAPipeline):
             )
             # should populate the context
             docs, infos = self.retrieve(message, history)
-            print(f"Got {len(docs)} retrieved documents")
 
             yield from infos
 
@@ -523,9 +602,7 @@ class FullDecomposeQAPipeline(FullQAPipeline):
     ) -> Generator[Document, None, Document]:
         sub_question_answer_output = ""
         if self.rewrite_pipeline:
-            print("Chosen rewrite pipeline", self.rewrite_pipeline)
             result = self.rewrite_pipeline(question=message)
-            print("Rewrite result", result)
             if isinstance(result, Document):
                 message = result.text
             elif (
@@ -548,7 +625,6 @@ class FullDecomposeQAPipeline(FullQAPipeline):
 
         # should populate the context
         docs, infos = self.retrieve(message, history)
-        print(f"Got {len(docs)} retrieved documents")
         yield from infos
 
         evidence_mode, evidence, images = self.evidence_pipeline(docs).content

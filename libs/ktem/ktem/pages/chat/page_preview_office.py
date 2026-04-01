@@ -1,0 +1,314 @@
+import logging
+import os
+import shutil
+import subprocess
+import threading
+import time
+
+from .page_preview_runtime import get_file_signature, get_pdf_preview_dir, is_valid_pdf
+from .page_preview_types import detect_office_extension, is_office_source
+
+# ============================================================================
+# TODO: 性能优化留底 - Office 文件处理
+# ============================================================================
+# 
+# 当前问题：
+#   1. DOC/DOCX、PPT、Excel 文件依赖 LibreOffice 后台转 PDF
+#   2. 转换延迟明显（2-10 秒），服务器资源占用高
+#   3. 并发能力差，多文件同时转换会卡死
+#
+# 潜在优化方向：
+#   1. 异步转换 + 进度提示（用户等待时显示转换进度）
+#   2. 增量转换（只转换变化的页面）
+#   3. 预转换（上传时立即转换，而非首次访问时）
+#   4. 分布式转换（专用转换服务队列）
+#   5. 缓存优化（长期缓存 + 失效策略）
+#
+# ============================================================================
+
+
+class OfficePreviewConversionService:
+    """Service for converting Office documents to PDF for preview.
+    
+    Uses LibreOffice in headless mode to convert DOC/DOCX, PPT/PPTX, XLS/XLSX
+    files to PDF format. Maintains a cache to avoid re-conversion.
+    """
+    
+    def __init__(self, logger: logging.Logger | None = None):
+        self._logger = logger or logging.getLogger(__name__)
+        # Cache for converted PDF paths: {file_signature: pdf_path}
+        self._office_pdf_cache: dict[str, str] = {}
+        # Status of conversion jobs: {file_signature: status_message}
+        self._office_pdf_job_status: dict[str, str] = {}
+        # Timestamp of conversion jobs: {file_signature: timestamp}
+        self._office_pdf_job_ts: dict[str, float] = {}
+        # Thread lock for managing concurrent conversions
+        self._office_pdf_job_lock = threading.Lock()
+
+    @staticmethod
+    def find_soffice_binary() -> str:
+        """Find LibreOffice soffice binary path.
+        
+        Searches in order:
+        1. SOFFICE_PATH environment variable
+        2. System PATH using shutil.which()
+        3. Common installation paths on Linux, macOS, and Windows
+        
+        Returns:
+            Path to soffice binary or empty string if not found
+        """
+        # 1. Check environment variable first (works on all platforms)
+        env_path = os.environ.get("SOFFICE_PATH", "").strip()
+        if env_path and os.path.isfile(env_path):
+            return env_path
+
+        # 2. Try to find in system PATH (cross-platform)
+        for cmd in ("soffice",):
+            found = shutil.which(cmd)
+            if found and os.path.isfile(found):
+                return found
+
+        # 3. Common installation paths for different platforms
+        candidates = []
+        
+        # Linux/Unix paths
+        candidates.extend([
+            "/usr/bin/soffice",
+            "/usr/local/bin/soffice",
+            "/snap/bin/soffice",
+            "/opt/libreoffice/program/soffice",
+            "/usr/lib/libreoffice/program/soffice",
+            "/usr/lib64/libreoffice/program/soffice",
+        ])
+        
+        # macOS paths
+        candidates.extend([
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+            "/Applications/OpenOffice.app/Contents/MacOS/soffice",
+        ])
+        
+        # Windows paths (generic, not user-specific)
+        candidates.extend([
+            r"C:\Program Files\LibreOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+            r"C:\Program Files\OpenOffice\program\soffice.exe",
+            r"C:\Program Files (x86)\OpenOffice\program\soffice.exe",
+        ])
+        
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        
+        return ""
+
+    def get_status(self, file_path: str) -> str:
+        """Get the status of an Office to PDF conversion job.
+        
+        Args:
+            file_path: Path to the Office document
+            
+        Returns:
+            Status message or empty string if no job found
+        """
+        if not file_path:
+            return ""
+        job_key = get_file_signature(file_path)
+        with self._office_pdf_job_lock:
+            return self._office_pdf_job_status.get(job_key, "")
+
+    def convert_to_pdf_preview(self, file_path: str, file_name: str) -> str:
+        """Convert Office document to PDF for preview.
+        
+        Converts DOC/DOCX, PPT/PPTX, XLS/XLSX files to PDF using LibreOffice.
+        Caches the result to avoid re-conversion.
+        
+        Args:
+            file_path: Path to the Office document
+            file_name: Name of the file (used to detect extension)
+            
+        Returns:
+            Path to the converted PDF file, or empty string if conversion fails
+        """
+        if not file_path or not os.path.isfile(file_path):
+            return ""
+        ext = detect_office_extension(file_name, file_path)
+        if ext not in {".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"}:
+            return ""
+        cache_key = get_file_signature(file_path)
+        cached_output = self._office_pdf_cache.get(cache_key, "")
+        if cached_output and os.path.isfile(cached_output):
+            return cached_output
+
+        preview_dir = get_pdf_preview_dir()
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        libreoffice_output_pdf = os.path.join(preview_dir, f"{stem}.pdf")
+        output_pdf = os.path.join(preview_dir, f"{stem}_{cache_key[:12]}.pdf")
+
+        convert_input_path = file_path
+        temp_input_path = ""
+        current_ext = os.path.splitext(file_path)[1].lower()
+        if not current_ext and ext:
+            temp_input_path = os.path.join(preview_dir, f"{stem}_{cache_key[:12]}{ext}")
+            try:
+                shutil.copyfile(file_path, temp_input_path)
+                convert_input_path = temp_input_path
+            except Exception:
+                convert_input_path = file_path
+
+        soffice_cmd = self.find_soffice_binary()
+        if soffice_cmd:
+            try:
+                result = subprocess.run(
+                    [
+                        soffice_cmd,
+                        "--headless",
+                        "--convert-to",
+                        "pdf",
+                        "--outdir",
+                        preview_dir,
+                        convert_input_path,
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=120,
+                )
+                if os.path.isfile(libreoffice_output_pdf):
+                    if libreoffice_output_pdf != output_pdf:
+                        try:
+                            shutil.copyfile(libreoffice_output_pdf, output_pdf)
+                        except Exception:
+                            output_pdf = libreoffice_output_pdf
+                    self._office_pdf_cache[cache_key] = output_pdf
+                    self._cleanup_temp_input(temp_input_path)
+                    return output_pdf
+                if os.path.isfile(output_pdf):
+                    self._office_pdf_cache[cache_key] = output_pdf
+                    self._cleanup_temp_input(temp_input_path)
+                    return output_pdf
+                stderr_msg = (result.stderr or "").strip()
+                stdout_msg = (result.stdout or "").strip()
+                if stderr_msg or stdout_msg:
+                    self._logger.warning(
+                        "LibreOffice conversion finished without output file. stdout=%s stderr=%s",
+                        stdout_msg[:500],
+                        stderr_msg[:500],
+                    )
+            except Exception as exc:
+                self._logger.warning(
+                    "Failed to convert office file to PDF preview via soffice: %s",
+                    repr(exc),
+                )
+        else:
+            self._logger.info(
+                "LibreOffice soffice binary not found. Skipping soffice conversion."
+            )
+
+        if ext in {".docx", ".doc"}:
+            try:
+                from docx2pdf import convert as docx2pdf_convert
+
+                docx2pdf_convert(convert_input_path, output_pdf)
+                if os.path.isfile(output_pdf):
+                    self._office_pdf_cache[cache_key] = output_pdf
+                    self._cleanup_temp_input(temp_input_path)
+                    return output_pdf
+            except Exception as exc:
+                self._logger.warning(
+                    "Failed to convert office file to PDF preview via docx2pdf: %s",
+                    repr(exc),
+                )
+
+        self._cleanup_temp_input(temp_input_path)
+        return ""
+
+    def get_cached_pdf_preview(self, file_path: str) -> str:
+        if not file_path or not os.path.isfile(file_path):
+            return ""
+        cache_key = get_file_signature(file_path)
+        cached_pdf = self._office_pdf_cache.get(cache_key, "")
+        if cached_pdf and os.path.isfile(cached_pdf) and is_valid_pdf(cached_pdf):
+            with self._office_pdf_job_lock:
+                self._office_pdf_job_status[cache_key] = "done"
+            return cached_pdf
+
+        preview_dir = get_pdf_preview_dir()
+        stem = os.path.splitext(os.path.basename(file_path))[0]
+        recovered_pdf = os.path.join(preview_dir, f"{stem}_{cache_key[:12]}.pdf")
+        if os.path.isfile(recovered_pdf) and is_valid_pdf(recovered_pdf):
+            self._office_pdf_cache[cache_key] = recovered_pdf
+            with self._office_pdf_job_lock:
+                self._office_pdf_job_status[cache_key] = "done"
+            return recovered_pdf
+        
+        # Also check for PDFs that might exist from previous sessions
+        # Try to find any PDF with matching stem in the preview directory
+        try:
+            if os.path.isdir(preview_dir):
+                for filename in os.listdir(preview_dir):
+                    if filename.startswith(stem + "_") and filename.endswith(".pdf"):
+                        candidate_path = os.path.join(preview_dir, filename)
+                        if os.path.isfile(candidate_path) and is_valid_pdf(candidate_path):
+                            self._office_pdf_cache[cache_key] = candidate_path
+                            with self._office_pdf_job_lock:
+                                self._office_pdf_job_status[cache_key] = "done"
+                            return candidate_path
+        except Exception:
+            pass  # Ignore errors when scanning preview directory
+        
+        return ""
+
+    def schedule_conversion(self, file_path: str, file_name: str):
+        if not is_office_source(file_name, file_path):
+            return
+        if not file_path or not os.path.isfile(file_path):
+            return
+        cached_pdf = self.get_cached_pdf_preview(file_path)
+        if cached_pdf:
+            return
+
+        job_key = get_file_signature(file_path)
+        now = time.time()
+        with self._office_pdf_job_lock:
+            current_status = self._office_pdf_job_status.get(job_key, "")
+            last_ts = float(self._office_pdf_job_ts.get(job_key, 0.0) or 0.0)
+            is_stale = (now - last_ts) > 180 if last_ts > 0 else True
+            if current_status in {"queued", "running"} and (not is_stale):
+                return
+            if current_status == "done":
+                if cached_pdf and os.path.isfile(cached_pdf):
+                    return
+            self._office_pdf_job_status[job_key] = "queued"
+            self._office_pdf_job_ts[job_key] = now
+
+        def _job():
+            with self._office_pdf_job_lock:
+                self._office_pdf_job_status[job_key] = "running"
+                self._office_pdf_job_ts[job_key] = time.time()
+            try:
+                output_pdf = self.convert_to_pdf_preview(file_path, file_name)
+                with self._office_pdf_job_lock:
+                    self._office_pdf_job_status[job_key] = (
+                        "done" if output_pdf and os.path.isfile(output_pdf) else "failed"
+                    )
+                    self._office_pdf_job_ts[job_key] = time.time()
+            except Exception as exc:
+                self._logger.warning("Background office->pdf conversion failed: %s", exc)
+                with self._office_pdf_job_lock:
+                    self._office_pdf_job_status[job_key] = "failed"
+                    self._office_pdf_job_ts[job_key] = time.time()
+
+        threading.Thread(
+            target=_job,
+            name=f"office-pdf-preview-{job_key[:8]}",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _cleanup_temp_input(temp_input_path: str):
+        if temp_input_path and os.path.isfile(temp_input_path):
+            try:
+                os.remove(temp_input_path)
+            except Exception:
+                pass

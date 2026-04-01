@@ -35,6 +35,8 @@ developers in mind.
 
 This project serves as a functional RAG UI for both end users who want to do QA on their
 documents and developers who want to build their own RAG pipeline.
+
+**✨ Enhanced with Page-Driven QA System**: Each page of each file maintains independent chat history, enabling precise page-level questions and answers.
 <br>
 
 ```yml
@@ -55,6 +57,8 @@ documents and developers who want to build their own RAG pipeline.
 ### For end users
 
 - **Clean & Minimalistic UI**: A user-friendly interface for RAG-based QA.
+- **Page-Level Chat Isolation**: Each page maintains separate chat history. Ask "What's on page 3?" without context mixing.
+- **Advanced Document Preview**: Faithful format preservation for PDF, Office documents with native-like viewing experience.
 - **Support for Various LLMs**: Compatible with LLM API providers (OpenAI, AzureOpenAI, Cohere, etc.) and local LLMs (via `ollama` and `llama-cpp-python`).
 - **Easy Installation**: Simple scripts to get you started quickly.
 
@@ -62,21 +66,26 @@ documents and developers who want to build their own RAG pipeline.
 
 - **Framework for RAG Pipelines**: Tools to build your own RAG-based document QA pipeline.
 - **Customizable UI**: See your RAG pipeline in action with the provided UI, built with <a href='https://github.com/gradio-app/gradio'>Gradio <img src='https://img.shields.io/github/stars/gradio-app/gradio'></a>.
-- **Gradio Theme**: If you use Gradio for development, check out our theme here: [kotaemon-gradio-theme](https://github.com/lone17/kotaemon-gradio-theme).
 
 ## Key Features
 
 - **Host your own document QA (RAG) web-UI**: Support multi-user login, organize your files in private/public collections, collaborate and share your favorite chat with others.
 
+- **🌟 Page-Driven QA System**: Unique page-level conversation isolation. Each page of each file maintains independent chat history. Ask questions like "What's on page 3?" with precise context awareness.
+
+- **📄 Advanced Document Preview**: Clean, minimalistic preview UI for different file types:
+  - **PDF Files**: Native PDF.js viewer with smooth scrolling and zooming
+  - **Office Documents** (DOC/DOCX, PPT/PPTX, XLS/XLSX): Auto-convert to PDF for faithful format preservation
+  - **Text Files** (TXT, MD, HTML): Syntax-highlighted text preview
+  - All previews support page-level navigation and question anchoring
+
 - **Organize your LLM & Embedding models**: Support both local LLMs & popular API providers (OpenAI, Azure, Ollama, Groq).
 
 - **Hybrid RAG pipeline**: Sane default RAG pipeline with hybrid (full-text & vector) retriever and re-ranking to ensure best retrieval quality.
 
-- **Multi-modal QA support**: Perform Question Answering on multiple documents with figures and tables support. Support multi-modal document parsing (selectable options on UI).
-
 - **Advanced citations with document preview**: By default the system will provide detailed citations to ensure the correctness of LLM answers. View your citations (incl. relevant score) directly in the _in-browser PDF viewer_ with highlights. Warning when retrieval pipeline return low relevant articles.
 
-- **Support complex reasoning methods**: Use question decomposition to answer your complex/multi-hop question. Support agent-based reasoning with `ReAct`, `ReWOO` and other agents.
+- **Support complex reasoning methods**: Use question decomposition to answer your complex/multi-hop question. Support agent-based reasoning with `ReAct` and `ReWOO` agents.
 
 - **Configurable settings UI**: You can adjust most important aspects of retrieval & generation process on the UI (incl. prompts).
 
@@ -93,10 +102,17 @@ documents and developers who want to build their own RAG pipeline.
 1. [Python](https://www.python.org/downloads/) >= 3.10
 2. [Docker](https://www.docker.com/): optional, if you [install with Docker](#with-docker-recommended)
 3. [Unstructured](https://docs.unstructured.io/open-source/installation/full-installation#full-installation) if you want to process files other than `.pdf`, `.html`, `.mhtml`, and `.xlsx` documents. Installation steps differ depending on your operating system. Please visit the link and follow the specific instructions provided there.
+4. **LibreOffice** (optional): Required for previewing Office documents (`.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`). Install from [libreoffice.org](https://www.libreoffice.org/download/download/).
+   - **Windows**: Default installation path `C:\Program Files\LibreOffice\program\soffice.exe`
+   - **Linux**: `sudo apt-get install libreoffice` or `dnf install libreoffice`
+   - **macOS**: `brew install --cask libreoffice`
+   - Configure via environment variable: `SOFFICE_PATH=/path/to/soffice`
 
 ### With Docker (recommended)
 
 1. We support both `lite` & `full` version of Docker images. With `full` version, the extra packages of `unstructured` will be installed, which can support additional file types (`.doc`, `.docx`, ...) but the cost is larger docker image size. For most users, the `lite` image should work well in most cases.
+
+   **Note**: Docker images include LibreOffice for Office document preview. No additional setup required.
 
    - To use the `full` version.
 
@@ -188,6 +204,12 @@ documents and developers who want to build their own RAG pipeline.
 
 <img src="https://raw.githubusercontent.com/Cinnamon/kotaemon/main/docs/images/pdf-viewer-setup.png" alt="pdf-setup" width="300">
 
+4. (Optional) **Office Document Preview Setup**: If you want to preview Office documents (`.doc`, `.docx`, `.ppt`, `.pptx`, `.xls`, `.xlsx`):
+   - Install LibreOffice from [libreoffice.org](https://www.libreoffice.org/download/download/)
+   - Verify installation: Run `soffice --version` in terminal
+   - Configure path if needed: Set `SOFFICE_PATH` environment variable
+   - The system will automatically convert Office files to PDF for faithful format preservation
+
 4. Start the web server:
 
    ```shell
@@ -203,13 +225,11 @@ documents and developers who want to build their own RAG pipeline.
 
 ### Setup GraphRAG
 
-> [!NOTE]
-> Official MS GraphRAG indexing only works with OpenAI or Ollama API.
-> We recommend most users to use NanoGraphRAG implementation for straightforward integration with Kotaemon.
+The application supports multiple GraphRAG implementations for knowledge graph-based retrieval:
 
 <details>
 
-<summary>Setup Nano GRAPHRAG</summary>
+<summary>Setup Nano GraphRAG (Recommended)</summary>
 
 - Install nano-GraphRAG: `pip install nano-graphrag`
 - `nano-graphrag` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/kotaemon/issues/440)
@@ -221,7 +241,7 @@ documents and developers who want to build their own RAG pipeline.
 
 <details>
 
-<summary>Setup LIGHTRAG</summary>
+<summary>Setup LightRAG</summary>
 
 - Install LightRAG: `pip install git+https://github.com/HKUDS/LightRAG.git`
 - `LightRAG` install might introduce version conflicts, see [this issue](https://github.com/Cinnamon/kotaemon/issues/440)
@@ -233,7 +253,7 @@ documents and developers who want to build their own RAG pipeline.
 
 <details>
 
-<summary>Setup MS GRAPHRAG</summary>
+<summary>Setup Microsoft GraphRAG</summary>
 
 - **Non-Docker Installation**: If you are not using Docker, install GraphRAG with the following command:
 
@@ -250,17 +270,6 @@ documents and developers who want to build their own RAG pipeline.
 
 See [Local model setup](docs/local_model.md).
 
-### Setup multimodal document parsing (OCR, table parsing, figure extraction)
-
-These options are available:
-
-- [Azure Document Intelligence (API)](https://azure.microsoft.com/en-us/products/ai-services/ai-document-intelligence)
-- [Adobe PDF Extract (API)](https://developer.adobe.com/document-services/docs/overview/pdf-extract-api/)
-- [Docling (local, open-source)](https://github.com/DS4SD/docling)
-  - To use Docling, first install required dependencies: `pip install docling`
-
-Select corresponding loaders in `Settings -> Retrieval Settings -> File loader`
-
 ### Customize your application
 
 - By default, all application data is stored in the `./ktem_app_data` folder. You can back up or copy this folder to transfer your installation to a new machine.
@@ -269,6 +278,31 @@ Select corresponding loaders in `Settings -> Retrieval Settings -> File loader`
 
   - `flowsettings.py`
   - `.env`
+
+#### Document Preview System
+
+The application provides advanced document preview capabilities:
+
+**Supported File Types:**
+- **PDF Files** (`.pdf`): Native PDF.js viewer with smooth scrolling and zooming
+- **Word Documents** (`.doc`, `.docx`): Auto-convert to PDF via LibreOffice
+- **PowerPoint Presentations** (`.ppt`, `.pptx`): Auto-convert to PDF via LibreOffice
+- **Excel Spreadsheets** (`.xls`, `.xlsx`): Auto-convert to PDF via LibreOffice
+- **Text Files** (`.txt`, `.md`, `.html`, `.mhtml`): Syntax-highlighted text preview
+
+**Page-Driven QA Architecture:**
+```
+Conversation
+├── File A
+│   ├── Page 1 → Independent chat history
+│   ├── Page 2 → Independent chat history
+│   └── Page 3 → Independent chat history
+└── File B
+    ├── Page 1 → Independent chat history
+    └── Page 2 → Independent chat history
+```
+
+Each page maintains completely isolated conversation history, enabling precise page-specific questions.
 
 #### `flowsettings.py`
 
@@ -285,9 +319,6 @@ KH_DOCSTORE=(Elasticsearch | LanceDB | SimpleFileDocumentStore)
 
 # setup your preferred vectorstore (for vector-based search)
 KH_VECTORSTORE=(ChromaDB | LanceDB | InMemory | Milvus | Qdrant)
-
-# Enable / disable multimodal QA
-KH_REASONINGS_USE_MULTIMODAL=True
 
 # Setup your new reasoning pipeline or modify existing one.
 KH_REASONINGS = [

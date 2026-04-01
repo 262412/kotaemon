@@ -40,8 +40,17 @@ CONTEXT_RELEVANT_WARNING_SCORE = config(
 DEFAULT_QA_TEXT_PROMPT = (
     "Use the following pieces of context to answer the question at the end in detail with clear explanation. "  # noqa: E501
     "If you don't know the answer, just say that you don't know, don't try to "
-    "make up an answer. Give answer in "
-    "{lang}.\n\n"
+    "make up an answer. "
+    "Use rich formatting in your answer: use markdown tables, bullet points, "
+    "numbered lists, and headings where appropriate to make the answer clear and structured. "
+    "For mathematical formulas and equations, ALWAYS use LaTeX format with $...$ for inline math (e.g., $w = (X^T X)^{{-1}} X^T d$) or $$...$$ for display math. "
+    "Examples of correct LaTeX formatting: "
+    "  - $w_{{n+1}} = (X_n^T X_n)^{{-1}} X_n^T d_n$ (subscripts and superscripts) "
+    "  - $\\alpha^2$ (Greek letters) "
+    "  - $\\frac{{a}}{{b}}$ (fractions) "
+    "  - $||w||^2$ (norms) "
+    "NEVER use plain text like w_(n+1) or (X^T X)^(-1) - always use proper LaTeX notation with dollar signs. "
+    "Give answer in {lang}.\n\n"
     "{context}\n"
     "Question: {question}\n"
     "Helpful Answer:"
@@ -49,9 +58,19 @@ DEFAULT_QA_TEXT_PROMPT = (
 
 DEFAULT_QA_TABLE_PROMPT = (
     "Use the given context: texts, tables, and figures below to answer the question, "
-    "then provide answer with clear explanation."
+    "then provide answer with clear explanation. "
     "If you don't know the answer, just say that you don't know, "
-    "don't try to make up an answer. Give answer in {lang}.\n\n"
+    "don't try to make up an answer. "
+    "Use rich formatting in your answer: use markdown tables, bullet points, "
+    "numbered lists, and headings where appropriate to make the answer clear and structured. "
+    "For mathematical formulas and equations, ALWAYS use LaTeX format with $...$ for inline math (e.g., $w = (X^T X)^{{-1}} X^T d$) or $$...$$ for display math. "
+    "Examples of correct LaTeX formatting: "
+    "  - $w_{{n+1}} = (X_n^T X_n)^{{-1}} X_n^T d_n$ (subscripts and superscripts) "
+    "  - $\\alpha^2$ (Greek letters) "
+    "  - $\\frac{{a}}{{b}}$ (fractions) "
+    "  - $||w||^2$ (norms) "
+    "NEVER use plain text like w_(n+1) or (X^T X)^(-1) - always use proper LaTeX notation with dollar signs. "
+    "Give answer in {lang}.\n\n"
     "Context:\n"
     "{context}\n"
     "Question: {question}\n"
@@ -72,6 +91,15 @@ DEFAULT_QA_CHATBOT_PROMPT = (
 DEFAULT_QA_FIGURE_PROMPT = (
     "Use the given context: texts, tables, and figures below to answer the question. "
     "If you don't know the answer, just say that you don't know. "
+    "Use rich formatting in your answer: use markdown tables, bullet points, "
+    "numbered lists, and headings where appropriate to make the answer clear and structured. "
+    "For mathematical formulas and equations, ALWAYS use LaTeX format with $...$ for inline math (e.g., $w = (X^T X)^{{-1}} X^T d$) or $$...$$ for display math. "
+    "Examples of correct LaTeX formatting: "
+    "  - $w_{{n+1}} = (X_n^T X_n)^{{-1}} X_n^T d_n$ (subscripts and superscripts) "
+    "  - $\\alpha^2$ (Greek letters) "
+    "  - $\\frac{{a}}{{b}}$ (fractions) "
+    "  - $||w||^2$ (norms) "
+    "NEVER use plain text like w_(n+1) or (X^T X)^(-1) - always use proper LaTeX notation with dollar signs. "
     "Give answer in {lang}.\n\n"
     "Context: \n"
     "{context}\n"
@@ -241,22 +269,27 @@ class AnswerWithContextPipeline(BaseComponent):
 
         if self.use_multimodal and evidence_mode == EVIDENCE_MODE_FIGURE:
             # create image message:
+            print(f"Multimodal mode enabled. Preparing {len(images[:MAX_IMAGES])} images")
+            image_messages = [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image},
+                }
+                for image in images[:MAX_IMAGES]
+            ]
+            print(f"Image messages created: {len(image_messages)}")
             messages.append(
                 HumanMessage(
                     content=[
                         {"type": "text", "text": prompt},
                     ]
-                    + [
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image},
-                        }
-                        for image in images[:MAX_IMAGES]
-                    ],
+                    + image_messages,
                 )
             )
+            print(f"Total message content length: {len(messages[-1].content)}")
         else:
             # append main prompt
+            print(f"Using text-only mode (use_multimodal={self.use_multimodal}, evidence_mode={evidence_mode})")
             messages.append(HumanMessage(content=prompt))
 
         try:
